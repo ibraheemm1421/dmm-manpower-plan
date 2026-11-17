@@ -74,14 +74,14 @@ function wsData(id = S.ws) {
   S.cache[id] = d;
   return d;
 }
-function countsFor(d, type, start) {
+function countsFor(d, type, start, field = 'count') {
   const o = {};
-  d.counts.filter((c) => c.period_type === type && c.period_start === start).forEach((c) => (o[c.exam_type_id] = Number(c.count)));
+  d.counts.filter((c) => c.period_type === type && c.period_start === start && c[field] !== null && c[field] !== undefined).forEach((c) => (o[c.exam_type_id] = Number(c[field])));
   return o;
 }
 function result(d = wsData(), type = S.type, start = pStart(), alt = S.alt) {
   const st = Calc.periodStart(type, start);
-  return Calc.compute(d, { alt: alt && d.hasAlt, type, start: st, counts: countsFor(d, type, st) });
+  return Calc.compute(d, { alt: alt && d.hasAlt, type, start: st, counts: countsFor(d, type, st), actuals: countsFor(d, type, st, 'actual') });
 }
 async function refresh() { await loadAll(); render(); }
 const pStart = () => Calc.periodStart(S.type, S.start);
@@ -145,19 +145,15 @@ async function boot() {
     route();
   } catch (e) { fail(e); showLogin('Could not load data: ' + (e.message || e)); }
 }
-const TRACK_SVG = `<svg viewBox="0 0 600 170" preserveAspectRatio="none" aria-hidden="true"><g stroke="rgba(255,255,255,.22)" stroke-width="3" fill="none"><path d="M-20 160 L620 40"/><path d="M-20 175 L620 70"/></g><g stroke="rgba(255,255,255,.14)" stroke-width="6">${Array.from({ length: 22 }, (_, i) => { const x = -10 + i * 30, y = 166 - i * 5.6; return `<path d="M${x} ${y + 12} L${x + 8} ${y - 26}"/>`; }).join('')}</g></svg>`;
 function showLogin(msg = '') {
-  $('#app').innerHTML = `<div class="login-wrap">
-    <div class="login-side"><div style="position:relative"><h1>Workshop manpower plan</h1><p>Man-hours needed for the planned exams against the hours the roster can give, for every DMM workshop.</p></div>
-      <div class="org">Saudi Arabia Railways · Dammam workshops</div>${TRACK_SVG}</div>
-    <div class="login-form"><form id="loginForm" autocomplete="on">
-      <h2>Sign in</h2>
+  $('#app').innerHTML = `<div class="login-wrap"><header class="appbar"><span class="logo"><span class="badge">DMM</span><span><b>Manpower Planning</b><small>Dammam Workshops</small></span></span></header>
+    <div class="login-body"><div class="login-card"><h1>Sign in</h1><p class="lead">Use the username and password given to you by the administrator.</p>
+    <form id="loginForm" autocomplete="on">
       <label class="f">Username<input type="text" id="lu" autocomplete="username" autocapitalize="none" required></label>
       <label class="f">Password<input type="password" id="lp" autocomplete="current-password" required></label>
       <div class="err" id="lerr" role="alert">${esc(msg)}</div>
       <button class="btn primary" type="submit" style="justify-content:center;padding:10px">Sign in</button>
-      <p class="hint" style="margin:0">Each workshop manager signs in to their own workshop. Ask the admin for an account.</p>
-    </form></div></div>`;
+    </form></div></div><div class="login-foot">Manpower planning for the Wagon, 10-Year Overhaul and Loco workshops</div></div>`;
   $('#loginForm').onsubmit = async (e) => {
     e.preventDefault();
     const u = $('#lu').value.trim().toLowerCase(), p = $('#lp').value;
@@ -176,84 +172,81 @@ function showLogin(msg = '') {
 }
 
 // ---------- shell ----------
-const ICONS = {
-  overview: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
-  dashboard: '<path d="M3 20h18M6 16V9M11 16V5M16 16v-5M21 16V8"/>',
-  workload: '<path d="M4 6h16M4 12h16M4 18h10"/>',
-  roster: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
-  employees: '<circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-3.5 3-6 7-6s7 2.5 7 6M16 4a3.5 3.5 0 010 7M19 20c0-2.5-1-4.5-3-5.5"/>',
-  timestudy: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/>',
-  settings: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
-  data: '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
-  users: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
-  log: '<path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/>',
-};
 const NAV = [
-  ['overview', 'All workshops', 'multi'], ['dashboard', 'Dashboard'], ['workload', 'Workload'], ['roster', 'Roster and leave'], ['employees', 'Employees'],
-  ['timestudy', 'Time study'], '-', ['settings', 'Settings'], ['data', 'Export and import'], ['users', 'Users', 'admin'], ['log', 'Activity'],
+  ['dashboard', 'Dashboard'], ['workload', 'Workload'], ['roster', 'Roster & Leave'], ['employees', 'Employees'],
+  ['timestudy', 'Time Study'], ['settings', 'Settings'], ['data', 'Export / Import'], ['users', 'Users', 'admin'], ['log', 'Activity'],
 ];
+// General manager (view only, all workshops) sees the executive dashboard only
+const execOnly = () => S.me && S.me.role === 'viewer' && !S.me.workshop_id;
+function navAllowed(v) {
+  if (v === 'dashboard') return true;
+  if (execOnly()) return false;
+  if (v === 'users') return isAdmin();
+  if (S.me.role === 'viewer' && ['settings', 'data', 'log'].includes(v)) return false;
+  return true;
+}
 function shellHTML() {
-  const nav = NAV.map((n) => {
-    if (n === '-') return '<div class="grp">Setup</div>';
-    if (n[2] === 'admin' && !isAdmin()) return '';
-    if (n[2] === 'multi' && !multiWs()) return '';
-    return `<a href="#${n[0]}" data-nav="${n[0]}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n[0]]}</svg>${n[1]}</a>`;
-  }).join('');
-  const roleText = { admin: 'Admin', editor: 'Can edit', viewer: 'View only' }[S.me.role];
-  return `<div class="shell"><aside class="rail" id="rail">
-      <div class="brand"><div class="mark"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 20L20 4M8 20L20 8"/><path d="M6 14l4 4M10 10l4 4M14 6l4 4" stroke-width="1.5"/></svg>Manpower plan</div><small>DMM workshops</small></div>
-      <nav id="nav">${nav}</nav>
-      <div class="me"><b>${esc(S.me.display_name || S.me.username)}</b><span>${roleText}${S.me.workshop_id ? ', ' + esc((S.all.workshops.find((w) => w.id === S.me.workshop_id) || {}).short_name || '') : ', all workshops'}</span>
-        <div class="row"><button id="pwBtn">Change password</button><button id="outBtn">Sign out</button></div></div>
-    </aside>
-    <div class="main"><div class="context" id="ctx"></div><div class="page" id="view"></div></div></div>`;
+  const nav = NAV.filter((n) => navAllowed(n[0])).map((n) => `<a href="#${n[0]}" data-nav="${n[0]}">${n[1]}</a>`).join('');
+  const roleText = { admin: 'Administrator', editor: 'Workshop manager', viewer: S.me.workshop_id ? 'View only' : 'General manager' }[S.me.role];
+  const scope = S.me.workshop_id ? (S.all.workshops.find((w) => w.id === S.me.workshop_id) || {}).short_name || '' : 'All workshops';
+  const initials = (S.me.display_name || S.me.username).split(/\s+/).map((x) => x[0]).join('').slice(0, 2).toUpperCase();
+  return `<header class="appbar">
+      <button class="menu-btn" id="menuBtn" aria-label="Menu">☰</button>
+      <a class="logo" href="#dashboard"><span class="badge">DMM</span><span><b>Manpower Planning</b><small>Dammam Workshops</small></span></a>
+      <nav class="topnav" id="nav">${nav}</nav><div class="spacer"></div>
+      <div class="usermenu"><button id="userBtn" aria-haspopup="true"><span class="avatar">${esc(initials)}</span><span class="who"><b>${esc(S.me.display_name || S.me.username)}</b><span>${roleText} · ${esc(scope)}</span></span>▾</button>
+        <div class="dropdown" id="userDrop"><button id="pwBtn">Change password</button><button id="outBtn">Sign out</button></div></div>
+    </header>
+    <main class="page" id="view"></main>`;
 }
 function bindShell() {
   $('#outBtn').onclick = async () => { await sb.auth.signOut(); S.me = null; showLogin(); };
-  $('#pwBtn').onclick = changeMyPassword;
-  $$('#nav a').forEach((a) => a.addEventListener('click', () => $('#rail').classList.remove('open')));
+  $('#pwBtn').onclick = () => { $('#userDrop').classList.remove('open'); changeMyPassword(); };
+  $('#userBtn').onclick = (e) => { e.stopPropagation(); $('#userDrop').classList.toggle('open'); };
+  document.addEventListener('click', () => { const d = $('#userDrop'); if (d) d.classList.remove('open'); });
+  $('#menuBtn').onclick = () => $('#nav').classList.toggle('open');
+  $$('#nav a').forEach((a) => a.addEventListener('click', () => $('#nav').classList.remove('open')));
 }
 function route() {
   let v = (location.hash || '').slice(1);
-  if (!VIEWS[v]) v = multiWs() ? 'overview' : 'dashboard';
-  if (v === 'users' && !isAdmin()) v = 'dashboard';
-  if (v === 'overview' && !multiWs()) v = 'dashboard';
+  if (v === 'overview') v = 'dashboard';
+  if (!VIEWS[v] || !navAllowed(v)) v = 'dashboard';
   S.view = v; render();
 }
 window.addEventListener('hashchange', () => { if (S.me && S.all) route(); });
-const PERIOD_VIEWS = ['overview', 'dashboard', 'workload', 'roster', 'data'];
+const PERIOD_VIEWS = ['dashboard', 'workload', 'roster', 'data'];
+const WS_VIEWS = ['workload', 'roster', 'employees', 'timestudy', 'settings', 'data'];
+let CHARTS = [];
 function render() {
   if (!S.me || !S.all) return;
+  CHARTS.forEach((c) => c.destroy()); CHARTS = [];
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === S.view));
-  renderContext();
   const el = $('#view');
-  if (!S.all.workshops.length) { el.innerHTML = '<div class="note warn">No workshop is linked to this account yet. Ask the admin.</div>'; return; }
-  try { VIEWS[S.view](el); } catch (e) { fail(e); el.innerHTML = `<div class="note warn">Something went wrong: ${esc(e.message)}</div>`; }
-  window.scrollTo({ top: 0 });
+  if (!S.all.workshops.length) { el.innerHTML = '<div class="note warn">No workshop is linked to this account yet. Ask the administrator.</div>'; return; }
+  try { VIEWS[S.view](el); bindFilters(el); } catch (e) { fail(e); el.innerHTML = `<div class="note warn">Something went wrong: ${esc(e.message)}</div>`; }
 }
-function renderContext() {
-  const c = $('#ctx');
-  const ws = S.all.workshops;
-  const showWs = S.view !== 'overview' && S.view !== 'users' && S.view !== 'log';
-  const d = showWs ? wsData() : null;
-  c.innerHTML = `<button class="menu-btn" id="menuBtn" aria-label="Menu">☰</button>
-    ${showWs ? `<div class="ws-pick">${multiWs() && ws.length > 1 ? `<label class="hidden" for="wsSel">Workshop</label><select id="wsSel">${ws.map((w) => `<option value="${w.id}" ${w.id === S.ws ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>` : `<span class="ws-name">${esc(d.workshop.name)}</span>`}</div>` : `<div class="ws-pick"><span class="ws-name">${S.view === 'overview' ? 'All workshops' : S.view === 'users' ? 'Users' : 'Activity'}</span></div>`}
-    <div class="spacer"></div>
-    ${PERIOD_VIEWS.includes(S.view) ? `
-      ${d && d.hasAlt && S.view !== 'data' ? `<div class="seg" role="group" aria-label="Roster option"><button data-alt="0" class="${!S.alt ? 'on' : ''}">Current roster</button><button data-alt="1" class="${S.alt ? 'on' : ''}">Alternative roster</button></div>` : ''}
+function filtersHTML({ ws = WS_VIEWS.includes(S.view), period = PERIOD_VIEWS.includes(S.view), alt = true } = {}) {
+  const d = ws ? wsData() : null;
+  return `<div class="filters">
+    ${ws && multiWs() && S.all.workshops.length > 1 ? `<select class="wsselect" id="wsSel" aria-label="Workshop">${S.all.workshops.map((w) => `<option value="${w.id}" ${w.id === S.ws ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>` : ''}
+    ${period ? `${alt && d && d.hasAlt && S.view !== 'data' ? `<div class="seg" role="group" aria-label="Roster option"><button data-alt="0" class="${!S.alt ? 'on' : ''}">Current roster</button><button data-alt="1" class="${S.alt ? 'on' : ''}">12 hr option</button></div>` : ''}
       <div class="seg" role="group" aria-label="Period"><button data-type="week" class="${S.type === 'week' ? 'on' : ''}">Week</button><button data-type="month" class="${S.type === 'month' ? 'on' : ''}">Month</button></div>
-      <div class="period"><button class="icon-btn" data-p="-1" aria-label="Previous">‹</button><span class="label">${periodLabel()}</span><button class="icon-btn" data-p="1" aria-label="Next">›</button>
-      <button class="btn sm" data-p="0">Today</button><input type="date" id="jump" value="${pStart()}" aria-label="Go to date"></div>` : ''}
-    <button class="icon-btn" id="reload" title="Reload from server" aria-label="Reload">↻</button>`;
-  $('#menuBtn', c).onclick = () => $('#rail').classList.toggle('open');
-  const sel = $('#wsSel', c); if (sel) sel.onchange = () => { S.ws = sel.value; store('mp_ws', S.ws); S.alt = false; S.section = ''; S.studyExam = null; render(); };
-  $$('[data-alt]', c).forEach((b) => (b.onclick = () => { S.alt = b.dataset.alt === '1'; render(); }));
-  $$('[data-type]', c).forEach((b) => (b.onclick = () => { S.type = b.dataset.type; render(); }));
-  $$('[data-p]', c).forEach((b) => (b.onclick = () => { const n = +b.dataset.p; S.start = n === 0 ? today() : Calc.shiftPeriod(S.type, S.start, n); render(); }));
-  const j = $('#jump', c); if (j) j.onchange = () => { if (j.value) { S.start = j.value; render(); } };
-  $('#reload', c).onclick = () => refresh().then(() => toast('Data reloaded')).catch(fail);
+      <div class="period"><button data-p="-1" aria-label="Previous period">‹</button><span class="label">${periodLabel()}</span><button data-p="1" aria-label="Next period">›</button></div>
+      <button class="btn sm" data-p="0">Today</button><input type="date" id="jump" value="${pStart()}" aria-label="Go to date">` : ''}
+    <button class="icon-btn" id="reload" title="Reload data" aria-label="Reload data">↻</button></div>`;
 }
-function head(title, sub, right = '') { return `<div class="page-head"><div><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ''}</div><div class="grow"></div>${right}</div>`; }
+function bindFilters(el) {
+  const sel = $('#wsSel', el); if (sel) sel.onchange = () => { S.ws = sel.value; store('mp_ws', S.ws); S.alt = false; S.section = ''; S.studyExam = null; render(); };
+  $$('[data-alt]', el).forEach((b) => (b.onclick = () => { S.alt = b.dataset.alt === '1'; render(); }));
+  $$('[data-type]', el).forEach((b) => (b.onclick = () => { S.type = b.dataset.type; render(); }));
+  $$('[data-p]', el).forEach((b) => (b.onclick = () => { const n = +b.dataset.p; S.start = n === 0 ? today() : Calc.shiftPeriod(S.type, S.start, n); render(); }));
+  const j = $('#jump', el); if (j) j.onchange = () => { if (j.value) { S.start = j.value; render(); } };
+  const r = $('#reload', el); if (r) r.onclick = () => refresh().then(() => toast('Data reloaded')).catch(fail);
+}
+function head(title, sub, right = '') {
+  const ws = WS_VIEWS.includes(S.view) ? wsData().workshop.name : '';
+  return `<div class="pagebar"><div><div class="crumb">${esc(ws || 'DMM Workshops')}</div><h1>${title}</h1>${sub ? `<div class="hint" style="max-width:80ch">${sub}</div>` : ''}</div><div class="grow"></div>${filtersHTML()}${right ? `<div class="filters">${right}</div>` : ''}</div>`;
+}
 
 function changeMyPassword() {
   modal({ title: 'Change password', body: `
@@ -270,169 +263,204 @@ function changeMyPassword() {
 }
 
 // =====================================================================
-// OVERVIEW (all workshops)
+// EXECUTIVE DASHBOARD (charts)
 // =====================================================================
-function viewOverview(el) {
-  const rows = S.all.workshops.map((w) => ({ w, r: result(wsData(w.id), S.type, pStart(), false) }));
-  const T = rows.reduce((a, x) => ({ req: a.req + x.r.tot.required, av: a.av + x.r.tot.available, mp: a.mp + x.r.tot.manpower, ex: a.ex + x.r.tot.extraPeople, ot: a.ot + x.r.tot.otNeeded, hc: a.hc + x.r.tot.headcount }), { req: 0, av: 0, mp: 0, ex: 0, ot: 0, hc: 0 });
-  el.innerHTML = head('All workshops', `Workload against roster capacity for ${periodLabel()}. Open a workshop for its roster and details.`) + `
-  <div class="stats">
-    <div class="stat"><div class="t">Required man-hours</div><div class="n">${fmt0(T.req)}</div></div>
-    <div class="stat"><div class="t">Available man-hours</div><div class="n">${fmt0(T.av)}</div></div>
-    <div class="stat"><div class="t">Balance</div><div class="n ${T.av - T.req < 0 ? 'neg' : 'pos'}">${signed(T.av - T.req, fmt0)} h</div></div>
-    <div class="stat"><div class="t">Extra people needed</div><div class="n ${T.ex > 0 ? 'neg' : ''}">${fmt(T.ex)}</div><div class="s">in sections that are short</div></div>
-    <div class="stat"><div class="t">People on the rosters</div><div class="n">${fmt0(T.hc)}</div></div>
-  </div>
-  <div class="ws-cards">${rows.map(({ w, r }) => { const t = r.tot, load = t.available ? t.required / t.available : 0; return `
-    <button class="ws-card" data-ws="${w.id}"><h3>${esc(w.name)}</h3>
-      <div class="big ${t.balance < 0 ? 'neg' : 'pos'}">${signed(t.balance, fmt0)} h</div>
-      <div class="minibar" title="Load ${pct(load)}"><i class="${load > 1 ? 'over' : ''}" style="width:${Math.min(100, load * 100)}%"></i></div>
-      <div class="line"><span>Required / available</span><b>${fmt0(t.required)} / ${fmt0(t.available)} h</b></div>
-      <div class="line"><span>Load</span><b>${pct(load)}</b></div>
-      <div class="line"><span>Extra people to close the work</span><b class="${t.extraPeople > 0 ? 'neg' : ''}">${fmt(t.extraPeople)}</b></div>
-      <div class="line"><span>People on roster</span><b>${t.headcount}</b></div>
-    </button>`; }).join('')}</div>
-  <div class="panel"><div class="phead"><h2>By section</h2></div><div class="tbl-wrap"><table><thead><tr><th>Workshop</th><th>Section</th><th class="num">Required h</th><th class="num">Available h</th><th class="num">Balance h</th><th class="num">People needed</th><th class="num">Extra people</th><th class="num">or OT h</th></tr></thead><tbody>
-    ${rows.map(({ w, r }) => r.sections.filter((s) => s.required || s.available).map((s) => `<tr><td>${esc(w.short_name)}</td><td>${esc(s.section.name)}</td><td class="num">${fmt0(s.required)}</td><td class="num">${fmt0(s.available)}</td>
-      <td class="num ${s.balance < 0 ? 'neg' : 'pos'}">${signed(s.balance, fmt0)}</td><td class="num">${fmt(s.peopleNeeded)}</td><td class="num ${s.manpower < 0 ? 'neg' : ''}">${s.manpower < 0 ? fmt(-s.manpower) : '–'}</td><td class="num">${s.otNeeded ? fmt0(s.otNeeded) : '–'}</td></tr>`).join('')).join('')}
-  </tbody></table></div></div>`;
-  $$('[data-ws]', el).forEach((b) => (b.onclick = () => { S.ws = b.dataset.ws; store('mp_ws', S.ws); location.hash = 'dashboard'; }));
+const COL = { planned: '#5FB0DD', actual: '#1976A3', one: '#1976A3', good: '#1F9D55', bad: '#D62828', grid: '#EDF1F5', text: '#5F6B76', ink: '#333333' };
+const valueLabels = {
+  id: 'valueLabels',
+  afterDatasetsDraw(chart, args, opts) {
+    if (!opts || !opts.show) return;
+    const { ctx } = chart; ctx.save(); ctx.font = '600 11px "Segoe UI", Arial, sans-serif'; ctx.fillStyle = COL.ink; ctx.textAlign = 'center';
+    chart.data.datasets.forEach((ds, i) => {
+      const meta = chart.getDatasetMeta(i); if (meta.hidden) return;
+      meta.data.forEach((bar, j) => {
+        const v = ds.data[j]; if (v === null || v === undefined || (v === 0 && !opts.zero)) return;
+        const txt = opts.fmt ? opts.fmt(v) : fmt(v);
+        const y = v >= 0 ? bar.y - 5 : bar.y + 13;
+        ctx.fillText(txt, bar.x, y);
+      });
+    });
+    ctx.restore();
+  },
+};
+function barChart(id, { labels, sets, fmtV = fmt, pctAxis = false, signed: sg = false, labelsOn = true, yTitle = '' }) {
+  const cv = document.getElementById(id); if (!cv || !window.Chart) return;
+  const ch = new Chart(cv, {
+    type: 'bar',
+    data: { labels, datasets: sets.map((s) => ({ label: s.label, data: s.data, backgroundColor: s.colors || s.color, borderRadius: 4, borderSkipped: 'start', maxBarThickness: 46, categoryPercentage: 0.7, barPercentage: 0.86 })) },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      layout: { padding: { top: 20 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { backgroundColor: '#fff', titleColor: COL.ink, bodyColor: COL.ink, borderColor: '#CED6DE', borderWidth: 1, padding: 10, boxPadding: 4,
+          callbacks: { label: (c) => ` ${c.dataset.label}: ${sg ? signed(c.raw, fmtV) : fmtV(c.raw)}${c.dataset.extra ? ' ' + c.dataset.extra[c.dataIndex] : ''}` } },
+        valueLabels: { show: labelsOn && labels.length * sets.length <= 18, fmt: sg ? (v) => signed(v, fmtV) : fmtV },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: COL.text, font: { size: 12 } }, border: { color: '#CED6DE' } },
+        y: { beginAtZero: true, grid: { color: COL.grid }, border: { display: false }, ticks: { color: COL.text, font: { size: 11 }, callback: (v) => (pctAxis ? Math.round(v * 100) + '%' : fmt(v, 1)) }, title: yTitle ? { display: true, text: yTitle, color: COL.text, font: { size: 11 } } : undefined },
+      },
+    },
+    plugins: [valueLabels],
+  });
+  sets.forEach((s, i) => { if (s.extra) ch.data.datasets[i].extra = s.extra; });
+  CHARTS.push(ch);
+}
+const legendHTML = (items) => `<div class="legend">${items.map(([c, t]) => `<span><i style="background:${c}"></i>${t}</span>`).join('')}</div>`;
+function card(id, title, sub, extra = '', cls = '') {
+  return `<div class="panel ${cls}"><div class="phead"><div class="ttl"><h2>${title}</h2>${sub ? `<p>${sub}</p>` : ''}</div></div>${extra}<div class="chartbox"><canvas id="${id}" role="img" aria-label="${esc(title)}"></canvas></div></div>`;
+}
+function plabel(type, st) { return type === 'week' ? dlabel(st).replace(/ \d{4}$/, '') : MONTHS[+st.slice(5, 7) - 1] + ' ' + st.slice(2, 4); }
+
+function viewDashboard(el) {
+  if (!S.dash) S.dash = multiWs() ? 'ALL' : S.me.workshop_id;
+  if (!multiWs()) S.dash = S.me.workshop_id;
+  const all = S.dash === 'ALL';
+  const wsList = S.all.workshops;
+  const tabs = multiWs() && wsList.length > 1 ? `<div class="tabs" role="tablist">${[['ALL', 'All workshops'], ...wsList.map((w) => [w.id, w.short_name])].map(([id, n]) => `<button role="tab" data-dash="${id}" class="${S.dash === id ? 'on' : ''}" aria-selected="${S.dash === id}">${esc(n)}</button>`).join('')}</div>` : '';
+  const title = all ? 'Workshops overview' : (wsList.find((w) => w.id === S.dash) || {}).name || 'Dashboard';
+  const head2 = `<div class="pagebar"><div><div class="crumb">Dashboard</div><h1>${esc(title)}</h1></div><div class="grow"></div>${filtersHTML({ ws: false, period: true, alt: false })}</div>`;
+  const results = (all ? wsList : wsList.filter((w) => w.id === S.dash)).map((w) => ({ w, r: result(wsData(w.id), S.type, pStart(), false) }));
+  const sum = (k) => results.reduce((a, x) => a + (x.r.tot[k] || 0), 0);
+  const T = { exams: sum('exams'), required: sum('required'), available: sum('available'), balance: sum('balance'), actual: sum('actual'), reported: sum('reported'), plannedReported: sum('plannedReported'),
+    deferred: sum('deferred'), alTechs: sum('alTechs'), alDays: sum('alDays'), cmExams: sum('cmExams'), cmHours: sum('cmHours'), extraPeople: sum('extraPeople'), otNeeded: sum('otNeeded'), headcount: sum('headcount'), manpower: sum('manpower') };
+  T.cmShare = T.available ? T.cmHours / T.available : 0;
+  const peopleBal = results.reduce((a, x) => a + x.r.tot.manpower, 0);
+  const kpis = `<div class="kpis">
+    <div class="kpi info"><div class="t">Planned exams</div><div class="v">${fmt0(T.exams)}</div><div class="s">${fmt0(T.required)} man-hours</div></div>
+    <div class="kpi info"><div class="t">Actual exams (done)</div><div class="v">${T.reported ? fmt0(T.actual) : '–'}${T.reported && T.plannedReported ? `<small>${pct(T.actual / T.plannedReported)}</small>` : ''}</div><div class="s">${T.reported ? 'of the exams reported' : 'Not reported yet'}</div></div>
+    <div class="kpi ${T.deferred ? 'warn' : 'good'}"><div class="t">Deferred exams</div><div class="v">${T.reported ? fmt0(T.deferred) : '–'}</div><div class="s">Planned but not done</div></div>
+    <div class="kpi info"><div class="t">Technicians on annual leave</div><div class="v">${fmt0(T.alTechs)}</div><div class="s">${fmt0(T.alDays)} leave days in the period</div></div>
+    <div class="kpi info"><div class="t">Corrective (CM) exams</div><div class="v">${fmt0(T.cmExams)}<small>${pct(T.cmShare)} of M/Hrs</small></div><div class="s">${fmt0(T.cmHours)} of ${fmt0(T.available)} available hours</div></div>
+    <div class="kpi ${T.balance < 0 ? 'bad' : 'good'}"><div class="t">M/Hrs ${T.balance < 0 ? 'deficit' : 'surplus'}</div><div class="v ${T.balance < 0 ? 'neg' : 'pos'}">${signed(T.balance, fmt0)}</div><div class="s">${fmt0(T.available)} available vs ${fmt0(T.required)} required</div></div>
+    <div class="kpi ${T.extraPeople > 0 ? 'bad' : 'good'}"><div class="t">M/Pwr deficit</div><div class="v ${T.extraPeople > 0 ? 'neg' : ''}">${fmt(T.extraPeople)}<small>people</small></div><div class="s">${T.extraPeople > 0 ? `or ${fmt0(T.otNeeded)} overtime hours` : 'Roster covers the work'}</div></div>
+  </div>`;
+
+  let charts = '', table = '';
+  const plan = legendHTML([[COL.planned, 'Planned'], [COL.actual, 'Actual']]);
+  const balLegend = legendHTML([[COL.good, 'Surplus'], [COL.bad, 'Deficit']]);
+  if (all) {
+    charts = `<div class="cols">
+      ${card('c_pa', 'Planned vs actual exams', `By workshop, ${periodLabel()}`, plan)}
+      ${card('c_def', 'Deferred exams', 'Planned exams not done (from reported actuals)')}
+      ${card('c_mh', 'M/Hrs deficit / surplus', 'Available minus required man-hours', balLegend)}
+      ${card('c_mp', 'M/Pwr deficit / surplus', 'People short or spare', balLegend)}
+      ${card('c_al', 'Technicians on annual leave', `At least one leave day in ${periodLabel()}`)}
+      ${card('c_cm', 'Corrective maintenance load', 'CM man-hours as a share of available M/Hrs')}
+      ${card('c_tr', 'Planned vs actual exams, all workshops', `Last 6 ${S.type === 'week' ? 'weeks' : 'months'}`, plan, 'span2')}
+    </div>`;
+    table = `<div class="panel"><div class="phead"><div class="ttl"><h2>Summary by workshop</h2><p>${periodLabel()}</p></div></div><div class="tbl-wrap"><table><thead><tr><th>Workshop</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deferred</th><th class="num">On A/L</th><th class="num">CM exams</th><th class="num">CM % of M/Hrs</th><th class="num">Required h</th><th class="num">Available h</th><th class="num">M/Hrs balance</th><th class="num">M/Pwr deficit</th></tr></thead><tbody>
+      ${results.map(({ w, r }) => { const t = r.tot; return `<tr><td><button class="linkbtn" data-dash="${w.id}">${esc(w.name)}</button></td><td class="num">${fmt0(t.exams)}</td><td class="num">${t.reported ? fmt0(t.actual) : '–'}</td><td class="num">${t.reported ? fmt0(t.deferred) : '–'}</td><td class="num">${t.alTechs}</td><td class="num">${fmt0(t.cmExams)}</td><td class="num">${pct(t.cmShare)}</td><td class="num">${fmt0(t.required)}</td><td class="num">${fmt0(t.available)}</td><td class="num ${t.balance < 0 ? 'neg' : 'pos'}">${signed(t.balance, fmt0)}</td><td class="num">${t.extraPeople ? `<span class="tag bad">${fmt(t.extraPeople)}</span>` : '<span class="tag good">0</span>'}</td></tr>`; }).join('')}
+    </tbody></table></div></div>`;
+  } else {
+    const d = wsData(S.dash), R = results[0].r;
+    const multiSec = R.sections.filter((s) => s.required || s.available).length > 1;
+    charts = `<div class="cols">
+      ${card('c_pa', 'Planned vs actual exams', `Last 6 ${S.type === 'week' ? 'weeks' : 'months'}`, plan)}
+      ${card('c_def', 'Deferred exams', `Last 6 ${S.type === 'week' ? 'weeks' : 'months'}`)}
+      ${card('c_mh', 'M/Hrs deficit / surplus', 'Available minus required man-hours', balLegend)}
+      ${card('c_mp', 'M/Pwr deficit / surplus', 'People short or spare', balLegend)}
+      ${card('c_al', 'Technicians on annual leave', 'At least one leave day in the period')}
+      ${card('c_cm', 'Corrective maintenance load', 'CM man-hours as a share of available M/Hrs')}
+      ${multiSec ? card('c_sec', 'M/Hrs balance by section', periodLabel(), balLegend, 'span2') : ''}
+    </div>`;
+    table = `<div class="panel"><div class="phead"><div class="ttl"><h2>What it takes to close ${periodLabel()}</h2><p>People or overtime needed per section to finish the planned exams</p></div>${canEdit() ? '<a class="btn sm" href="#workload">Enter planned and actual exams</a>' : ''}</div>${closeTable(R, d)}</div>`;
+  }
+  el.innerHTML = head2 + tabs + kpis + charts + table;
+  $$('[data-dash]', el).forEach((b) => (b.onclick = () => { S.dash = b.dataset.dash; if (S.dash !== 'ALL') { S.ws = S.dash; store('mp_ws', S.ws); } render(); }));
+
+  // ---- chart data
+  const bal = (arr) => arr.map((v) => (v < 0 ? COL.bad : COL.good));
+  if (all) {
+    const L = results.map((x) => x.w.short_name);
+    barChart('c_pa', { labels: L, sets: [{ label: 'Planned', data: results.map((x) => x.r.tot.exams), color: COL.planned }, { label: 'Actual', data: results.map((x) => (x.r.tot.reported ? x.r.tot.actual : null)), color: COL.actual }], fmtV: fmt0 });
+    barChart('c_def', { labels: L, sets: [{ label: 'Deferred', data: results.map((x) => x.r.tot.deferred), color: COL.one }], fmtV: fmt0 });
+    const mh = results.map((x) => Math.round(x.r.tot.balance));
+    barChart('c_mh', { labels: L, sets: [{ label: 'M/Hrs balance', data: mh, colors: bal(mh) }], fmtV: fmt0, signed: true });
+    const mp = results.map((x) => Math.round(x.r.tot.manpower * 10) / 10);
+    barChart('c_mp', { labels: L, sets: [{ label: 'People', data: mp, colors: bal(mp) }], fmtV: (v) => fmt(v), signed: true });
+    barChart('c_al', { labels: L, sets: [{ label: 'Technicians', data: results.map((x) => x.r.tot.alTechs), color: COL.one, extra: results.map((x) => `(${x.r.tot.alDays} leave days)`) }], fmtV: fmt0 });
+    barChart('c_cm', { labels: L, sets: [{ label: 'CM share', data: results.map((x) => x.r.tot.cmShare), color: COL.one, extra: results.map((x) => `(${fmt0(x.r.tot.cmExams)} exams, ${fmt0(x.r.tot.cmHours)} h)`) }], fmtV: pct, pctAxis: true });
+    const tr = Array.from({ length: 6 }, (_, i) => Calc.shiftPeriod(S.type, pStart(), i - 5));
+    const trR = tr.map((st) => wsList.map((w) => result(wsData(w.id), S.type, st, false).tot));
+    barChart('c_tr', { labels: tr.map((st) => plabel(S.type, st)), sets: [{ label: 'Planned', data: trR.map((a) => a.reduce((s, t) => s + t.exams, 0)), color: COL.planned }, { label: 'Actual', data: trR.map((a) => (a.some((t) => t.reported) ? a.reduce((s, t) => s + t.actual, 0) : null)), color: COL.actual }], fmtV: fmt0 });
+  } else {
+    const d = wsData(S.dash);
+    const tr = Array.from({ length: 6 }, (_, i) => Calc.shiftPeriod(S.type, pStart(), i - 5));
+    const rs = tr.map((st) => result(d, S.type, st, false).tot);
+    const L = tr.map((st) => plabel(S.type, st));
+    barChart('c_pa', { labels: L, sets: [{ label: 'Planned', data: rs.map((t) => t.exams), color: COL.planned }, { label: 'Actual', data: rs.map((t) => (t.reported ? t.actual : null)), color: COL.actual }], fmtV: fmt0 });
+    barChart('c_def', { labels: L, sets: [{ label: 'Deferred', data: rs.map((t) => t.deferred), color: COL.one }], fmtV: fmt0 });
+    const mh = rs.map((t) => Math.round(t.balance));
+    barChart('c_mh', { labels: L, sets: [{ label: 'M/Hrs balance', data: mh, colors: bal(mh) }], fmtV: fmt0, signed: true });
+    const mp = rs.map((t) => Math.round(t.manpower * 10) / 10);
+    barChart('c_mp', { labels: L, sets: [{ label: 'People', data: mp, colors: bal(mp) }], fmtV: (v) => fmt(v), signed: true });
+    barChart('c_al', { labels: L, sets: [{ label: 'Technicians', data: rs.map((t) => t.alTechs), color: COL.one, extra: rs.map((t) => `(${t.alDays} leave days)`) }], fmtV: fmt0 });
+    barChart('c_cm', { labels: L, sets: [{ label: 'CM share', data: rs.map((t) => t.cmShare), color: COL.one, extra: rs.map((t) => `(${fmt0(t.cmExams)} exams, ${fmt0(t.cmHours)} h)`) }], fmtV: pct, pctAxis: true });
+    const R = results[0].r, secs = R.sections.filter((s) => s.required || s.available);
+    if (secs.length > 1) { const v = secs.map((s) => Math.round(s.balance)); barChart('c_sec', { labels: secs.map((s) => s.section.name), sets: [{ label: 'M/Hrs balance', data: v, colors: bal(v) }], fmtV: fmt0, signed: true }); }
+  }
 }
 
-// =====================================================================
-// DASHBOARD
-// =====================================================================
 function closeTable(R, d) {
   const secs = R.sections.filter((s) => s.required || s.available || s.rows.some((r) => r.pct > 0));
-  return `<div class="tbl-wrap"><table><thead><tr><th>Section</th><th class="num">Exams</th><th class="num">Required h</th><th class="num">Available h</th><th class="num">Balance h</th><th class="num">People needed</th><th class="num">People available</th><th class="num">Extra people</th><th class="num">or OT hours</th></tr></thead><tbody>
+  return `<div class="tbl-wrap"><table><thead><tr><th>Section</th><th class="num">Planned exams</th><th class="num">Required h</th><th class="num">Available h</th><th class="num">Balance h</th><th class="num">People needed</th><th class="num">People available</th><th class="num">Extra people</th><th class="num">or OT hours</th></tr></thead><tbody>
     ${secs.map((s) => `<tr><td>${esc(s.section.name)}${s.sick ? `<span class="sub-line">less ${pct(s.sick)} sick allowance</span>` : ''}</td><td class="num">${fmt0(s.exams)}</td><td class="num">${fmt(s.required)}</td><td class="num">${fmt(s.available)}</td>
       <td class="num ${s.balance < 0 ? 'neg' : 'pos'}">${signed(s.balance)}</td><td class="num">${fmt(s.peopleNeeded)}</td><td class="num">${fmt(s.peopleHave)}</td>
-      <td class="num">${s.manpower < 0 ? `<span class="pill bad">${fmt(-s.manpower)}</span>` : '<span class="pill good">none</span>'}</td><td class="num">${s.otNeeded ? fmt0(s.otNeeded) : '–'}</td></tr>`).join('')}
+      <td class="num">${s.manpower < 0 ? `<span class="tag bad">${fmt(-s.manpower)}</span>` : '<span class="tag good">0</span>'}</td><td class="num">${s.otNeeded ? fmt0(s.otNeeded) : '–'}</td></tr>`).join('')}
     ${secs.length > 1 ? `<tr class="total"><td>Workshop</td><td class="num">${fmt0(R.tot.exams)}</td><td class="num">${fmt(R.tot.required)}</td><td class="num">${fmt(R.tot.available)}</td><td class="num ${R.tot.balance < 0 ? 'neg' : 'pos'}">${signed(R.tot.balance)}</td><td class="num">${fmt(R.tot.peopleNeeded)}</td><td class="num">${fmt(R.tot.peopleHave)}</td><td class="num">${fmt(R.tot.extraPeople)}</td><td class="num">${R.tot.otNeeded ? fmt0(R.tot.otNeeded) : '–'}</td></tr>` : ''}
   </tbody></table></div>
-  <p class="hint" style="margin:8px 0 0">People needed = required hours ÷ hours one full-time person gives in the period. Extra people = people needed − people available. Instead of extra people the same gap can be closed with the overtime hours shown.</p>`;
-}
-function viewDashboard(el) {
-  const d = wsData(), R = result(d), T = R.tot;
-  const noun = periodNoun();
-  const short = T.balance < 0;
-  const say = !T.required ? `No workload is entered for ${noun} yet. The roster gives <b>${fmt0(T.available)} man-hours</b>.`
-    : short ? `${noun[0].toUpperCase() + noun.slice(1)} needs <b>${fmt0(T.required)} man-hours</b>. The roster gives ${fmt0(T.available)}, so you are <b>${fmt0(-T.balance)} hours short</b>.`
-      : `${noun[0].toUpperCase() + noun.slice(1)} needs <b>${fmt0(T.required)} man-hours</b>. The roster gives ${fmt0(T.available)}, leaving <b>${fmt0(T.balance)} hours spare</b>.`;
-  const load = T.available ? T.required / T.available : 0;
-  const outlook = Array.from({ length: 6 }, (_, i) => { const st = Calc.shiftPeriod(S.type, pStart(), i); return { start: st, r: result(d, S.type, st) }; });
-  const work = R.sections.flatMap((s) => s.work.filter((w) => w.count > 0).map((w) => ({ ...w, sec: s.section.name })));
-  el.innerHTML = `
-  <section class="hero" aria-label="Summary">
-    <div style="position:relative;z-index:1"><p class="say">${say}</p>
-      <p class="sub">${heroSub(R)}</p>
-      <div class="track"><div class="bar"><div class="fill" style="width:${Math.min(100, load * 100)}%"></div>${load > 1 ? `<div class="over" style="left:${100 / load}%;right:0"></div>` : ''}</div>
-        <div class="legend2"><span>Load ${pct(load)} of available hours</span><span>${periodLabel()}</span></div></div></div>
-    <div class="figs">
-      <div class="fig"><div class="n">${fmt0(T.required)}</div><div class="t">man-hours required</div></div>
-      <div class="fig"><div class="n">${fmt0(T.available)}</div><div class="t">man-hours available</div></div>
-      <div class="fig ${T.extraPeople > 0 ? 'bad' : 'good'}"><div class="n">${T.extraPeople > 0 ? fmt(T.extraPeople) : '0'}</div><div class="t">extra people needed</div></div>
-      <div class="fig ${T.otNeeded > 0 ? 'bad' : 'good'}"><div class="n">${fmt0(T.otNeeded)}</div><div class="t">overtime hours to close it</div></div>
-    </div>
-  </section>
-  <div class="stats">
-    <div class="stat"><div class="t">People on roster</div><div class="n">${T.headcount}</div><div class="s">${fmt2(T.fte)} counted</div></div>
-    <div class="stat"><div class="t">Productive hours</div><div class="n">${fmt0(T.prod)}</div><div class="s">plus ${fmt0(T.ot)} overtime</div></div>
-    <div class="stat"><div class="t">Staff days</div><div class="n">${fmt0(T.staffDays)}</div></div>
-    <div class="stat"><div class="t">Paid hours</div><div class="n">${fmt0(T.paid)}</div></div>
-    <div class="stat"><div class="t">Exams planned</div><div class="n">${fmt0(T.exams)}</div></div>
-  </div>
-  <div class="panel"><div class="phead"><h2>What it takes to close ${noun === 'this week' ? 'this week' : noun}</h2><div class="grow"></div><a class="btn sm" href="#workload">Edit workload</a></div>${closeTable(R, d)}</div>
-  <div class="cols">
-    <div class="panel"><div class="phead"><h2>Next 6 ${S.type === 'week' ? 'weeks' : 'months'}</h2></div>${outlookChart(outlook)}
-      <div class="tbl-wrap" style="margin-top:12px"><table><thead><tr><th>${S.type === 'week' ? 'Week of' : 'Month'}</th><th class="num">Required</th><th class="num">Available</th><th class="num">Balance</th><th class="num">Extra people</th></tr></thead><tbody>
-      ${outlook.map((o) => `<tr><td>${S.type === 'week' ? dlabel(o.start) : MONTHS[+o.start.slice(5, 7) - 1] + ' ' + o.start.slice(0, 4)}</td><td class="num">${fmt0(o.r.tot.required)}</td><td class="num">${fmt0(o.r.tot.available)}</td>
-        <td class="num ${o.r.tot.balance < 0 ? 'neg' : 'pos'}">${signed(o.r.tot.balance, fmt0)}</td><td class="num">${o.r.tot.extraPeople ? fmt(o.r.tot.extraPeople) : '–'}</td></tr>`).join('')}</tbody></table></div></div>
-    <div class="panel"><div class="phead"><h2>Workload this period</h2></div>${work.length ? `<div class="tbl-wrap"><table><thead><tr><th>Exam</th><th class="num">Std h</th><th class="num">Count</th><th class="num">Man-hours</th></tr></thead><tbody>
-      ${work.map((w) => `<tr><td>${esc(w.exam.asset)} ${esc(w.exam.exam)}<span class="sub-line">${esc(w.sec)}${w.auto ? ', default weekly rate' : ''}</span></td><td class="num">${fmt2(w.exam.hours)}</td><td class="num">${fmt0(w.count)}</td><td class="num">${fmt(w.hours)}</td></tr>`).join('')}
-      <tr class="total"><td colspan="2">Total</td><td class="num">${fmt0(T.exams)}</td><td class="num">${fmt(T.required)}</td></tr></tbody></table></div>` : `<p class="hint">No exams entered for ${noun}. <a href="#workload">Enter the workload</a>.</p>`}
-      ${explainBlock(R, d)}</div>
-  </div>`;
-}
-function heroSub(R) {
-  const T = R.tot;
-  if (!T.required) return 'Enter the planned exams on the Workload page to see the gap.';
-  const shortSecs = R.sections.filter((s) => s.manpower < 0);
-  if (!shortSecs.length) return 'The roster covers all the planned work.';
-  const list = shortSecs.map((s) => `${s.section.name} needs ${fmt(-s.manpower)} more ${-s.manpower === 1 ? 'person' : 'people'} or ${fmt0(s.otNeeded)} overtime hours`).join('; ');
-  if (shortSecs.length === R.sections.filter((s) => s.required || s.available).length || R.sections.length === 1) return `To close the work you need about ${fmt(T.extraPeople)} more ${T.extraPeople === 1 ? 'person' : 'people'} on the roster, or ${fmt0(T.otNeeded)} overtime hours.`;
-  return `There are spare hours overall, but hours do not move between sections: ${list}.`;
-}
-function explainBlock(R, d) {
-  const s = R.sections.find((x) => x.required || x.available) || R.sections[0];
-  if (!s) return '';
-  return `<details style="margin-top:14px"><summary class="hint" style="cursor:pointer">How the numbers are worked out</summary><div class="explain" style="margin-top:8px"><table>
-    <tr><td>Required</td><td>Σ exams × standard man-hours per exam</td></tr>
-    <tr><td>Available</td><td>Σ for every person and day: productive hours of the shift × counted % (+ overtime)${s.sick ? ', less the section sick allowance' : ''}</td></tr>
-    <tr><td>Counted %</td><td>Technician 100%, Team Leader ${pct(Number(d.settings.tl_factor))} unless set on the person, Foreman and office 0%. Leave, sick, training and absence give 0 hours.</td></tr>
-    <tr><td>One person</td><td>${esc(s.div.text)} = <b>${fmt(s.div.value)} h</b> in ${esc(s.section.name)}</td></tr>
-    <tr><td>People needed</td><td>${fmt(s.required)} ÷ ${fmt(s.div.value)} = <b>${fmt2(s.peopleNeeded)}</b></td></tr>
-    <tr><td>Extra people</td><td>(${fmt(s.required)} − ${fmt(s.available)}) ÷ ${fmt(s.div.value)} = <b>${fmt2(-s.manpower)}</b></td></tr>
-  </table></div></details>`;
-}
-function outlookChart(list) {
-  const W = 600, H = 200, pad = 40, bw = 22;
-  const max = Math.max(1, ...list.flatMap((o) => [o.r.tot.required, o.r.tot.available]));
-  const step = (W - pad - 10) / list.length;
-  const y = (v) => H - 26 - (v / max) * (H - 50);
-  let s = `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Required against available man-hours">`;
-  [0, 0.5, 1].forEach((f) => { const yy = y(max * f); s += `<line x1="${pad}" x2="${W - 6}" y1="${yy}" y2="${yy}" stroke="#E2E8ED"/><text x="${pad - 6}" y="${yy + 4}" text-anchor="end">${fmt0(max * f)}</text>`; });
-  list.forEach((o, i) => {
-    const x = pad + i * step + step / 2, t = o.r.tot;
-    s += `<rect x="${x - bw - 1}" y="${y(t.available)}" width="${bw}" height="${H - 26 - y(t.available)}" fill="#DCEFF8" stroke="#1976A3"><title>Available ${fmt0(t.available)} h</title></rect>`;
-    s += `<rect x="${x + 1}" y="${y(t.required)}" width="${bw}" height="${H - 26 - y(t.required)}" fill="#0B4F79"><title>Required ${fmt0(t.required)} h</title></rect>`;
-    s += `<text x="${x}" y="${H - 9}" text-anchor="middle">${S.type === 'week' ? dlabel(o.start).replace(/ \d{4}$/, '') : MONTHS[+o.start.slice(5, 7) - 1]}</text>`;
-    s += `<text x="${x}" y="${Math.min(y(t.required), y(t.available)) - 6}" text-anchor="middle" style="fill:${t.balance < 0 ? '#D62828' : '#1F9D55'};font-weight:600">${signed(t.balance, fmt0)}</text>`;
-  });
-  return s + `</svg></div><div class="legend"><span><i style="background:#DCEFF8;border-color:#1976A3"></i>Available</span><span><i style="background:#0B4F79;border-color:#0B4F79"></i>Required</span><span>Figures above the bars are the balance in hours</span></div>`;
+  <p class="hint" style="margin:8px 0 0">People needed = required hours ÷ productive hours of one full-time person in the period (${esc((secs[0] && secs[0].div.text) || '')}). Extra people = people needed − people available; the same gap can be covered with the overtime hours shown.</p>`;
 }
 
 // =====================================================================
 // WORKLOAD
 // =====================================================================
 function viewWorkload(el) {
-  const d = wsData(), st = pStart(), counts = countsFor(d, S.type, st), days = Calc.periodDays(S.type, st);
-  const ed = canEdit();
-  const R = result(d);
+  const d = wsData(), st = pStart(), planned = countsFor(d, S.type, st), actual = countsFor(d, S.type, st, 'actual'), days = Calc.periodDays(S.type, st);
+  const ed = canEdit(), R = result(d), dis = ed ? '' : 'disabled';
   const secs = d.sections.map((s) => ({ s, ex: d.exam_types.filter((x) => x.active && x.section_id === s.id) })).filter((g) => g.ex.length);
   const orphan = d.exam_types.filter((x) => x.active && !x.section_id);
   if (orphan.length) secs.push({ s: { id: null, name: 'No section' }, ex: orphan });
-  el.innerHTML = head('Workload', `Exams planned for ${periodLabel()}. Man-hours = count × standard hours from the time study. Weekly and monthly counts are kept apart.`) + `
-  <div class="panel"><div class="tbl-wrap"><table id="wl"><thead><tr><th>Exam</th><th class="num">Std man-h</th><th class="num">Crew</th><th class="num">Count</th><th class="num">Man-hours</th></tr></thead><tbody>
-  ${secs.map((g) => `<tr class="group"><td colspan="5">${esc(g.s.name)}</td></tr>` + g.ex.map((x) => {
-    const c = Calc.examCount(x, S.type, days, counts);
-    return `<tr data-id="${x.id}" data-h="${x.hours}" data-auto="${c.auto ? c.n : ''}"><td>${esc(x.asset)} <b>${esc(x.exam)}</b>${x.category !== 'Planned' ? ` <span class="pill muted">${esc(x.category)}</span>` : ''}${x.default_weekly ? `<span class="sub-line">Default ${fmt(x.default_weekly)} a week when no count is entered</span>` : ''}</td>
-      <td class="num">${fmt2(x.hours)}</td><td class="num">${x.crew ? fmt(x.crew) : ''}</td>
-      <td class="num"><input type="number" min="0" step="1" value="${counts[x.id] ?? ''}" placeholder="${c.auto ? c.n : ''}" aria-label="Count for ${esc(x.asset + ' ' + x.exam)}" ${ed ? '' : 'disabled'}></td><td class="num mh"></td></tr>`;
+  el.innerHTML = head('Workload', `Planned and actual exams for ${periodLabel()}. Man-hours = planned × standard hours. Leave Actual empty until the exams are counted.`) + `
+  <div class="panel"><div class="tbl-wrap"><table id="wl"><thead><tr><th>Exam</th><th class="num">Std man-h</th><th class="num">Planned</th><th class="num">Actual (done)</th><th class="num">Deferred</th><th class="num">Planned man-h</th></tr></thead><tbody>
+  ${secs.map((g) => `<tr class="group"><td colspan="6">${esc(g.s.name)}</td></tr>` + g.ex.map((x) => {
+    const c = Calc.examCount(x, S.type, days, planned);
+    return `<tr data-id="${x.id}" data-h="${x.hours}" data-auto="${c.auto ? c.n : ''}"><td>${esc(x.asset)} <b>${esc(x.exam)}</b>${x.category === 'Corrective' ? ' <span class="tag warn">CM</span>' : x.category === 'Job' ? ' <span class="tag muted">Job</span>' : ''}${x.default_weekly ? `<span class="sub-line">Default ${fmt(x.default_weekly)} a week when Planned is empty</span>` : ''}</td>
+      <td class="num">${fmt2(x.hours)}</td>
+      <td class="num"><input type="number" class="w_p" min="0" step="1" value="${planned[x.id] ?? ''}" placeholder="${c.auto ? c.n : ''}" aria-label="Planned ${esc(x.asset + ' ' + x.exam)}" ${dis}></td>
+      <td class="num"><input type="number" class="w_a" min="0" step="1" value="${actual[x.id] ?? ''}" aria-label="Actual ${esc(x.asset + ' ' + x.exam)}" ${dis}></td>
+      <td class="num w_d"></td><td class="num mh"></td></tr>`;
   }).join('')).join('')}
-  <tr class="total"><td colspan="3">Total</td><td class="num" id="wl_n"></td><td class="num" id="wl_h"></td></tr></tbody></table></div>
-  <div class="row" style="margin-top:14px">${ed ? `<button class="btn primary" id="wl_save">Save workload</button><button class="btn" id="wl_copy">Copy previous ${S.type}</button><button class="btn ghost" id="wl_clear">Clear</button>` : '<span class="hint">View only.</span>'}
-  <span class="hint">Change standard hours in Time study or Settings.</span></div></div>
-  <div class="panel"><div class="phead"><h2>What it takes to close this workload</h2><span class="hint">Saved figures</span></div>${closeTable(R, d)}</div>`;
+  <tr class="total"><td colspan="2">Total</td><td class="num" id="wl_p"></td><td class="num" id="wl_a"></td><td class="num" id="wl_d"></td><td class="num" id="wl_h"></td></tr></tbody></table></div>
+  <div class="row" style="margin-top:14px">${ed ? `<button class="btn primary" id="wl_save">Save</button><button class="btn" id="wl_copy">Copy planned from previous ${S.type}</button><button class="btn ghost" id="wl_clear">Clear</button>` : '<span class="hint">View only.</span>'}
+  <span class="hint">Weekly and monthly figures are kept apart. Standard hours are changed in Time Study or Settings.</span></div></div>
+  <div class="panel"><div class="phead"><div class="ttl"><h2>What it takes to close this workload</h2><p>From the saved figures</p></div></div>${closeTable(R, d)}</div>`;
   const tbody = $('#wl tbody', el);
   const calc = () => {
-    let n = 0, h = 0;
-    $$('tr[data-id]', tbody).forEach((tr) => { const i = $('input', tr); const c = i.value === '' ? (+tr.dataset.auto || 0) : +i.value || 0; const mh = c * +tr.dataset.h; n += c; h += mh; $('.mh', tr).textContent = c ? fmt(mh) : ''; });
-    $('#wl_n', el).textContent = fmt0(n); $('#wl_h', el).textContent = fmt(h);
+    let n = 0, a = 0, df = 0, h = 0, anyA = false;
+    $$('tr[data-id]', tbody).forEach((tr) => {
+      const pi = $('.w_p', tr), ai = $('.w_a', tr);
+      const p = pi.value === '' ? (+tr.dataset.auto || 0) : +pi.value || 0, mh = p * +tr.dataset.h;
+      n += p; h += mh; $('.mh', tr).textContent = p ? fmt(mh) : '';
+      if (ai.value !== '') { anyA = true; const av = +ai.value || 0; a += av; const dd = Math.max(0, p - av); df += dd; $('.w_d', tr).innerHTML = dd ? `<span class="tag warn">${fmt0(dd)}</span>` : '0'; } else $('.w_d', tr).textContent = '';
+    });
+    $('#wl_p', el).textContent = fmt0(n); $('#wl_a', el).textContent = anyA ? fmt0(a) : '–'; $('#wl_d', el).textContent = anyA ? fmt0(df) : '–'; $('#wl_h', el).textContent = fmt(h);
   };
   $$('input', tbody).forEach((i) => (i.oninput = calc)); calc();
   if (!ed) return;
   $('#wl_save', el).onclick = async () => {
     try {
-      const rows = $$('tr[data-id]', tbody).map((tr) => ({ v: $('input', tr).value, id: +tr.dataset.id }));
-      const keep = rows.filter((r) => r.v !== '').map((r) => ({ workshop_id: S.ws, period_type: S.type, period_start: st, exam_type_id: r.id, count: +r.v || 0 }));
-      const drop = rows.filter((r) => r.v === '').map((r) => r.id);
+      const rows = $$('tr[data-id]', tbody).map((tr) => ({ id: +tr.dataset.id, p: $('.w_p', tr).value, a: $('.w_a', tr).value }));
+      const keep = rows.filter((r) => r.p !== '' || r.a !== '').map((r) => ({ workshop_id: S.ws, period_type: S.type, period_start: st, exam_type_id: r.id, count: r.p === '' ? null : +r.p, actual: r.a === '' ? null : +r.a }));
+      const drop = rows.filter((r) => r.p === '' && r.a === '').map((r) => r.id);
       if (keep.length) await q(sb.from('workload_counts').upsert(keep));
       if (drop.length) await q(sb.from('workload_counts').delete().eq('period_type', S.type).eq('period_start', st).in('exam_type_id', drop));
       await refresh(); toast('Workload saved', 'ok');
     } catch (e) { fail(e); }
   };
-  $('#wl_copy', el).onclick = () => { const prev = countsFor(d, S.type, Calc.shiftPeriod(S.type, st, -1)); $$('tr[data-id]', tbody).forEach((tr) => { $('input', tr).value = prev[tr.dataset.id] ?? ''; }); calc(); toast('Copied. Press Save workload to keep it.'); };
+  $('#wl_copy', el).onclick = () => { const prev = countsFor(d, S.type, Calc.shiftPeriod(S.type, st, -1)); $$('tr[data-id]', tbody).forEach((tr) => { $('.w_p', tr).value = prev[tr.dataset.id] ?? ''; }); calc(); toast('Copied. Press Save to keep it.'); };
   $('#wl_clear', el).onclick = () => { $$('input', tbody).forEach((i) => (i.value = '')); calc(); };
 }
 
@@ -907,7 +935,7 @@ const COLS = {
   Employees: ['Employee No', 'Name', 'Role', 'Team', 'Section', 'Counted % (blank = auto)', 'Specialty', 'Skills', 'Start Date', 'End Date', 'Status', 'Own Pattern', 'Own Alternative Pattern', 'Notes'],
   'Leave and Status': ['Employee No', 'Employee Name', 'Status', 'Shift Code (Custom only)', 'From', 'To', 'Notes'],
   'Exam Types': ['Section', 'Type', 'Asset', 'Exam', 'Std Man-hours', 'Crew', 'Default per Week', 'Active', 'Order'],
-  Workload: ['Period (Week/Month)', 'Period Start', 'Section', 'Asset', 'Exam', 'Count'],
+  Workload: ['Period (Week/Month)', 'Period Start', 'Section', 'Asset', 'Exam', 'Planned', 'Actual'],
   'Time Study': ['Section', 'Asset', 'Exam', 'Element', 'Readings (min)', 'Rating %', 'Crew', 'Order'],
   Sections: ['Section', 'Sick Allowance %', 'Order'],
   'Shift Codes': ['Code', 'Description', 'Shift (8/12/-)', 'Used For', 'Paid Hrs', 'Productive Hrs', 'OT Hrs', 'Staff Day (1/0)'],
@@ -942,7 +970,7 @@ async function exportAll() {
   sheet(wb, 'Employees', d.employees.map((e) => ({ 'Employee No': e.emp_no, Name: e.name, Role: e.role, Team: (d.teamMap[e.team_id] || {}).code || '', Section: e.section_id ? secName(d, e.section_id) : '', 'Counted % (blank = auto)': e.hours_pct === null || e.hours_pct === undefined ? '' : Math.round(e.hours_pct * 100), Specialty: e.specialty || '', Skills: e.skills || '', 'Start Date': e.start_date || '', 'End Date': e.end_date || '', Status: e.status, 'Own Pattern': patName(d, e.pattern_main), 'Own Alternative Pattern': patName(d, e.pattern_alt), Notes: e.notes || '' })), COLS.Employees);
   sheet(wb, 'Leave and Status', d.status_changes.map((c) => ({ 'Employee No': (empM[c.employee_uid] || {}).emp_no, 'Employee Name': (empM[c.employee_uid] || {}).name, Status: c.status_type, 'Shift Code (Custom only)': c.code || '', From: c.date_from, To: c.date_to, Notes: c.notes || '' })), COLS['Leave and Status']);
   sheet(wb, 'Exam Types', d.exam_types.map((x) => ({ Section: secName(d, x.section_id), Type: x.category, Asset: x.asset, Exam: x.exam, 'Std Man-hours': Number(x.hours), Crew: x.crew ?? '', 'Default per Week': x.default_weekly ?? '', Active: x.active ? 'Yes' : 'No', Order: x.sort })), COLS['Exam Types']);
-  sheet(wb, 'Workload', [...d.counts].sort((a, b) => a.period_start.localeCompare(b.period_start)).map((c) => { const x = exM[c.exam_type_id] || {}; return { 'Period (Week/Month)': c.period_type === 'week' ? 'Week' : 'Month', 'Period Start': c.period_start, Section: secName(d, x.section_id), Asset: x.asset, Exam: x.exam, Count: Number(c.count) }; }), COLS.Workload);
+  sheet(wb, 'Workload', [...d.counts].sort((a, b) => a.period_start.localeCompare(b.period_start)).map((c) => { const x = exM[c.exam_type_id] || {}; return { 'Period (Week/Month)': c.period_type === 'week' ? 'Week' : 'Month', 'Period Start': c.period_start, Section: secName(d, x.section_id), Asset: x.asset, Exam: x.exam, Planned: c.count ?? '', Actual: c.actual ?? '' }; }), COLS.Workload);
   sheet(wb, 'Time Study', study.map((t) => { const x = exM[t.exam_type_id] || {}; return { Section: secName(d, x.section_id), Asset: x.asset, Exam: x.exam, Element: t.element, 'Readings (min)': (t.readings || []).join(', '), 'Rating %': Number(t.rating_pct), Crew: t.crew, Order: t.sort }; }), COLS['Time Study']);
   sheet(wb, 'Sections', d.sections.map((s) => ({ Section: s.name, 'Sick Allowance %': Math.round(s.sick_pct * 1000) / 10, Order: s.sort })), COLS.Sections);
   sheet(wb, 'Shift Codes', d.shift_codes.map((c) => ({ Code: c.code, Description: c.description, 'Shift (8/12/-)': c.shift_type, 'Used For': c.status_type || '', 'Paid Hrs': Number(c.paid_hrs), 'Productive Hrs': Number(c.prod_hrs), 'OT Hrs': Number(c.ot_hrs), 'Staff Day (1/0)': c.staff_day })), COLS['Shift Codes']);
@@ -1071,7 +1099,8 @@ async function runImport(data, opt) {
       const ex = findEx(r), ps = cellDate(r['Period Start']);
       if (!ex || !ps) { miss++; return; }
       const type = /week/i.test(str(r['Period (Week/Month)'])) ? 'week' : 'month';
-      rows.push({ workshop_id: W, period_type: type, period_start: Calc.periodStart(type, ps), exam_type_id: ex.id, count: Number(r.Count) || 0 });
+      const pv = str(r.Planned !== undefined ? r.Planned : r.Count), av = str(r.Actual);
+      rows.push({ workshop_id: W, period_type: type, period_start: Calc.periodStart(type, ps), exam_type_id: ex.id, count: pv === '' ? null : Number(pv), actual: av === '' ? null : Number(av) });
     });
     if (rows.length) await q(sb.from('workload_counts').upsert(rows));
     log.push(`Workload: ${rows.length} counts saved${miss ? `, ${miss} rows skipped (unknown exam or date)` : ''}`);
@@ -1105,7 +1134,7 @@ async function runImport(data, opt) {
   return log;
 }
 
-const VIEWS = { overview: viewOverview, dashboard: viewDashboard, workload: viewWorkload, roster: viewRoster, employees: viewEmployees, timestudy: viewTimeStudy, settings: viewSettings, data: viewData, users: viewUsers, log: viewLog };
+const VIEWS = { dashboard: viewDashboard, workload: viewWorkload, roster: viewRoster, employees: viewEmployees, timestudy: viewTimeStudy, settings: viewSettings, data: viewData, users: viewUsers, log: viewLog };
 sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT' && S.me) { S.me = null; showLogin('You were signed out.'); } });
 boot();
 })();

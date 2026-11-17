@@ -82,7 +82,7 @@ const Calc = (() => {
 
   // count of an exam in a period: explicit count, else default weekly rate
   function examCount(x, type, days, counts) {
-    if (counts && counts[x.id] !== undefined) return { n: Number(counts[x.id]), auto: false };
+    if (counts && counts[x.id] !== undefined && counts[x.id] !== null) return { n: Number(counts[x.id]), auto: false };
     if (x.default_weekly) return { n: type === 'week' ? Number(x.default_weekly) : Math.round((Number(x.default_weekly) * workdays(days)) / 5), auto: true };
     return { n: 0, auto: false };
   }
@@ -99,10 +99,10 @@ const Calc = (() => {
 
   function compute(raw, opts) {
     const d = raw.codeMap ? raw : indexData(raw);
-    const { alt = false, type, start, counts } = opts;
+    const { alt = false, type, start, counts, actuals = {} } = opts;
     const days = periodDays(type, start);
     const secs = {};
-    const mk = (id) => (secs[id] = secs[id] || { id, section: d.secMap[id] || { id, name: 'No section', sick_pct: 0 }, rows: [], prod: 0, ot: 0, paid: 0, staffDays: 0, headcount: 0, fte: 0, w8: 0, w12: 0, work: [] });
+    const mk = (id) => (secs[id] = secs[id] || { id, section: d.secMap[id] || { id, name: 'No section', sick_pct: 0 }, rows: [], prod: 0, ot: 0, paid: 0, staffDays: 0, headcount: 0, fte: 0, w8: 0, w12: 0, work: [], alTechs: 0, alDays: 0 });
     d.sections.forEach((s) => mk(s.id));
     const rows = [];
     for (const emp of d.employees) {
@@ -118,6 +118,7 @@ const Calc = (() => {
           r.prod += pct * Number(sc.prod_hrs); r.ot += pct * Number(sc.ot_hrs);
         }
         r.cells.push({ day, ...dc });
+        if (sc && sc.status_type === 'Annual Leave') r.alDays = (r.alDays || 0) + 1;
       }
       rows.push(r);
       const s = mk(r.section_id);
@@ -125,12 +126,15 @@ const Calc = (() => {
       if (emp.status === 'Active') s.headcount++;
       s.fte += pct;
       if (pattern && pattern.shift_hrs === 12) s.w12 += pct; else s.w8 += pct;
+      if (r.alDays && emp.status === 'Active' && pct > 0) { s.alTechs++; s.alDays += r.alDays; }
     }
     d.exam_types.filter((x) => x.active).forEach((x) => {
       const c = examCount(x, type, days, counts);
-      mk(x.section_id).work.push({ exam: x, count: c.n, auto: c.auto, hours: c.n * Number(x.hours) });
+      const a = actuals[x.id] === undefined || actuals[x.id] === null ? null : Number(actuals[x.id]);
+      mk(x.section_id).work.push({ exam: x, count: c.n, auto: c.auto, hours: c.n * Number(x.hours), actual: a, deferred: a === null ? 0 : Math.max(0, c.n - a) });
     });
-    const T = { prod: 0, ot: 0, paid: 0, staffDays: 0, headcount: 0, fte: 0, gross: 0, available: 0, required: 0, exams: 0, balance: 0, manpower: 0, peopleNeeded: 0, peopleHave: 0 };
+    const T = { prod: 0, ot: 0, paid: 0, staffDays: 0, headcount: 0, fte: 0, gross: 0, available: 0, required: 0, exams: 0, balance: 0, manpower: 0, peopleNeeded: 0, peopleHave: 0,
+      actual: 0, reported: 0, plannedReported: 0, deferred: 0, cmExams: 0, cmActual: 0, cmHours: 0, alTechs: 0, alDays: 0 };
     const sections = Object.values(secs).map((s) => {
       s.gross = s.prod + s.ot;
       s.sick = Number(s.section.sick_pct || 0);
@@ -146,10 +150,20 @@ const Calc = (() => {
       s.efficiency = s.available ? s.required / s.available : 0;
       s.otNeeded = Math.max(0, -s.balance);
       s.active = s.rows.length > 0 || s.work.length > 0;
+      const rep = s.work.filter((w) => w.actual !== null);
+      s.reported = rep.length; s.actual = rep.reduce((a, w) => a + w.actual, 0); s.plannedReported = rep.reduce((a, w) => a + w.count, 0);
+      s.deferred = rep.reduce((a, w) => a + w.deferred, 0);
+      const cm = s.work.filter((w) => w.exam.category === 'Corrective');
+      s.cmExams = cm.reduce((a, w) => a + w.count, 0); s.cmActual = cm.reduce((a, w) => a + (w.actual || 0), 0); s.cmHours = cm.reduce((a, w) => a + w.hours, 0);
+      s.cmShare = s.available ? s.cmHours / s.available : 0;
+      ['actual', 'reported', 'plannedReported', 'deferred', 'cmExams', 'cmActual', 'cmHours', 'alTechs', 'alDays'].forEach((k) => (T[k] += s[k]));
       ['prod', 'ot', 'paid', 'staffDays', 'headcount', 'fte', 'gross', 'available', 'required', 'exams', 'balance', 'manpower', 'peopleNeeded', 'peopleHave'].forEach((k) => (T[k] += s[k]));
       return s;
     }).filter((s) => s.active).sort((a, b) => (a.section.sort ?? 99) - (b.section.sort ?? 99));
     T.efficiency = T.available ? T.required / T.available : 0;
+    T.cmShare = T.available ? T.cmHours / T.available : 0;
+    T.completion = T.plannedReported ? T.actual / T.plannedReported : null;
+    T.deficitHours = Math.max(0, -T.balance);
     T.otNeeded = sections.reduce((a, s) => a + s.otNeeded, 0);
     T.extraPeople = sections.reduce((a, s) => a + Math.max(0, -s.manpower), 0);
     return { days, rows, sections, tot: T, type, alt };
