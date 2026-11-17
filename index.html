@@ -309,26 +309,29 @@ td input[type=text] { width: 100%; }
 }
 /* ---------- printed dashboard report (Export PDF) ---------- */
 .print-head { display: none; }
-@page { size: A4 landscape; margin: 10mm; }
+@page { size: A4 landscape; margin: 8mm; }
 @media print {
-  .appbar, .filters, .btn, .toolbar, .tabs, .toasts, .crumb, .pagebar h1 { display: none !important; }
-  html, body { background: var(--color-paper-2); }
   * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  .page { max-width: none; padding: 0; }
-  .pagebar { margin: 0; }
-  .print-head { display: flex; align-items: center; gap: var(--space-lg); padding-bottom: var(--space-sm); margin-bottom: var(--space-md); border-bottom: 2px solid var(--color-brand); }
-  .print-head .sar-logo { height: 56px; }
-  .print-head h1 { font-size: var(--text-xl); color: var(--color-brand); }
-  .print-head p { color: var(--color-muted); font-size: var(--text-sm); }
-  .panel, .figures, tr { break-inside: avoid; }
-  .panel { padding: var(--space-sm) var(--space-md); margin-bottom: var(--space-sm); }
-  .tbl-wrap { overflow: visible; }
-  tbody tr:hover td { background: none; }
-  table { font-size: var(--text-xs); }
-  th, td { padding: var(--space-2xs) var(--space-xs); }
-  th, .ledger .lname, .ledger .vizcell .v { white-space: normal; }
-  .ledger .vizcell svg { width: 56px; height: auto; }
-  .ledger .vizcell { gap: var(--space-2xs); }
+  html, body { background: var(--color-paper-2); }
+}
+/* body.printing is set just before printing; the dashboard is laid out at a fixed width and zoomed to fit one page */
+body.printing { background: var(--color-paper-2); }
+body.printing .appbar, body.printing .filters, body.printing .btn, body.printing .toolbar, body.printing .tabs, body.printing .toasts, body.printing .pagebar, body.printing .phead p, body.printing .note { display: none !important; }
+body.printing .page { padding: 0; margin: 0; }
+body.printing .page.fit { width: 1400px; max-width: none; zoom: var(--print-zoom, 1); }
+body.printing .print-head { display: flex; align-items: center; gap: var(--space-lg); padding-bottom: var(--space-sm); margin-bottom: var(--space-sm); border-bottom: 2px solid var(--color-brand); }
+body.printing .print-head .sar-logo { height: 52px; }
+body.printing .print-head h1 { font-size: var(--text-xl); color: var(--color-brand); }
+body.printing .print-head p { color: var(--color-muted); font-size: var(--text-sm); }
+body.printing .figures { margin-bottom: var(--space-sm); }
+body.printing .figure { padding: var(--space-xs) var(--space-md); }
+body.printing .panel { padding: var(--space-xs) var(--space-md) var(--space-sm); margin-bottom: var(--space-sm); }
+body.printing .phead { margin-bottom: var(--space-2xs); }
+body.printing .legend { margin-bottom: var(--space-2xs); }
+body.printing .tbl-wrap { overflow: visible; }
+body.printing tbody tr:hover td { background: none; }
+body.printing th, body.printing td { padding: var(--space-3xs) var(--space-xs); }
+body.printing .print-skip { display: none; }
 }
 
 /* ---------- small pieces used by the edit screens ---------- */
@@ -772,6 +775,19 @@ function route() {
 window.addEventListener('hashchange', () => { if (S.me && S.all) route(); });
 const PERIOD_VIEWS = ['dashboard', 'workload', 'roster', 'data'];
 const WS_VIEWS = ['workload', 'roster', 'employees', 'timestudy', 'settings', 'data'];
+// Printing: lay the page out at a fixed width, then zoom it so it fits one A4 landscape page
+function fitPrint() {
+  const page = $('#view'); if (!page) return;
+  document.body.classList.add('printing');
+  if (!$('.print-head', page)) return;
+  page.classList.add('fit'); page.style.setProperty('--print-zoom', 1);
+  const W = 1400, availW = 1062, availH = 733; // A4 landscape at 96 dpi minus 8 mm margins
+  const z = Math.min(availW / W, availH / page.scrollHeight) * 0.97;
+  page.style.setProperty('--print-zoom', z.toFixed(3));
+}
+function unfitPrint() { document.body.classList.remove('printing'); const page = $('#view'); if (page) { page.classList.remove('fit'); page.style.removeProperty('--print-zoom'); } }
+window.addEventListener('beforeprint', fitPrint);
+window.addEventListener('afterprint', unfitPrint);
 function render() {
   if (!S.me || !S.all) return;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === S.view));
@@ -918,7 +934,7 @@ function viewDashboard(el) {
       ${ledgerTable('Workshop', results.map(({ w, r }) => ({ name: `<button class="linkbtn" data-dash="${w.id}">${esc(w.name)}</button>`, t: r.tot })), results.length > 1 ? T : null)}</section>`;
   } else {
     const w = scope[0], d = wsData(w.id), R = results[0].r, tots = trendOf(w), s = series(tots);
-    chart = `<section class="panel"><div class="phead"><div class="ttl"><h2>Planned and done exams, last ${nPer} ${unit}</h2><p>Hover a period for its figures</p></div></div>
+    chart = `<section class="panel print-skip"><div class="phead"><div class="ttl"><h2>Planned and done exams, last ${nPer} ${unit}</h2><p>Hover a period for its figures</p></div></div>
       <div class="legend"><span><i class="sw-planned"></i>Planned</span><span><i class="sw-actual"></i>Done</span></div>
       <figure class="chart m0">${trendSVG(periods.map((st) => plabel(S.type, st)), s.p, s.a, { w: 1240, h: 260, title: `Planned and done exams, ${w.name}` })}</figure></section>`;
     ledger = `<section class="panel"><div class="phead"><div class="ttl"><h2>Ledger by ${S.type}</h2><p>The selected ${S.type} is the last row</p></div></div>${LEGEND}

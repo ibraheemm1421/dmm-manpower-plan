@@ -216,6 +216,19 @@ function route() {
 window.addEventListener('hashchange', () => { if (S.me && S.all) route(); });
 const PERIOD_VIEWS = ['dashboard', 'workload', 'roster', 'data'];
 const WS_VIEWS = ['workload', 'roster', 'employees', 'timestudy', 'settings', 'data'];
+// Printing: lay the page out at a fixed width, then zoom it so it fits one A4 landscape page
+function fitPrint() {
+  const page = $('#view'); if (!page) return;
+  document.body.classList.add('printing');
+  if (!$('.print-head', page)) return;
+  page.classList.add('fit'); page.style.setProperty('--print-zoom', 1);
+  const W = 1400, availW = 1062, availH = 733; // A4 landscape at 96 dpi minus 8 mm margins
+  const z = Math.min(availW / W, availH / page.scrollHeight) * 0.97;
+  page.style.setProperty('--print-zoom', z.toFixed(3));
+}
+function unfitPrint() { document.body.classList.remove('printing'); const page = $('#view'); if (page) { page.classList.remove('fit'); page.style.removeProperty('--print-zoom'); } }
+window.addEventListener('beforeprint', fitPrint);
+window.addEventListener('afterprint', unfitPrint);
 function render() {
   if (!S.me || !S.all) return;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === S.view));
@@ -362,7 +375,7 @@ function viewDashboard(el) {
       ${ledgerTable('Workshop', results.map(({ w, r }) => ({ name: `<button class="linkbtn" data-dash="${w.id}">${esc(w.name)}</button>`, t: r.tot })), results.length > 1 ? T : null)}</section>`;
   } else {
     const w = scope[0], d = wsData(w.id), R = results[0].r, tots = trendOf(w), s = series(tots);
-    chart = `<section class="panel"><div class="phead"><div class="ttl"><h2>Planned and done exams, last ${nPer} ${unit}</h2><p>Hover a period for its figures</p></div></div>
+    chart = `<section class="panel print-skip"><div class="phead"><div class="ttl"><h2>Planned and done exams, last ${nPer} ${unit}</h2><p>Hover a period for its figures</p></div></div>
       <div class="legend"><span><i class="sw-planned"></i>Planned</span><span><i class="sw-actual"></i>Done</span></div>
       <figure class="chart m0">${trendSVG(periods.map((st) => plabel(S.type, st)), s.p, s.a, { w: 1240, h: 260, title: `Planned and done exams, ${w.name}` })}</figure></section>`;
     ledger = `<section class="panel"><div class="phead"><div class="ttl"><h2>Ledger by ${S.type}</h2><p>The selected ${S.type} is the last row</p></div></div>${LEGEND}
