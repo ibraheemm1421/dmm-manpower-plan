@@ -12,7 +12,7 @@
   --color-rule: #DFE5EB; --color-rule-2: #C9D2DB;
   --color-accent: #1976A3; --color-accent-ink: #FFFFFF; --color-focus: #1976A3;
   --color-brand: #0B4F79; --color-brand-ink: #FFFFFF; --color-brand-soft: #DCEFF8; --color-series-2: #8CC4E5;
-  --color-good: #1F9D55; --color-good-soft: #E5F4EC; --color-bad: #D62828; --color-bad-soft: #FBE8E8; --color-good-ink: #146B3A; --color-bad-ink: #A61B1B; --color-warn: #8F5B0A; --color-warn-soft: #FCF1DD;
+  --color-good: #1F9D55; --color-good-soft: #E5F4EC; --color-bad: #D62828; --color-bad-soft: #FBE8E8; --color-sar-teal: #00758D; --color-sar-ink: #3D3935; --color-good-ink: #146B3A; --color-bad-ink: #A61B1B; --color-warn: #8F5B0A; --color-warn-soft: #FCF1DD;
   --color-leave: #5B3F8C; --color-leave-soft: #ECE6F6; --color-scrim: #10283C73;
   --font-display: "Segoe UI", ui-sans-serif, system-ui, -apple-system, Roboto, Arial, sans-serif; --font-body: "Segoe UI", ui-sans-serif, system-ui, -apple-system, Roboto, Arial, sans-serif; --font-outlier: var(--font-body);
   --radius-card: 6px; --radius-control: 4px; --radius-pill: 999px; --rule-hair: 1px; --shadow-card: none;

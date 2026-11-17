@@ -146,8 +146,8 @@ async function boot() {
   } catch (e) { fail(e); showLogin('Could not load data: ' + (e.message || e)); }
 }
 function showLogin(msg = '') {
-  $('#app').innerHTML = `<div class="login-wrap"><header class="appbar"><span class="logo">DMM <span class="mark">Manpower planning</span></span></header>
-    <div class="login-body"><div class="login-card"><h1>Sign in</h1><p class="lead">Use the username and password given to you by the administrator.</p>
+  $('#app').innerHTML = `<div class="login-wrap"><header class="appbar"><span class="logo">${SAR_MARK}<span class="mark">DMM Manpower planning</span></span></header>
+    <div class="login-body"><div class="login-card"><div class="login-logo">${SAR_LOGO}</div><h1>Sign in</h1><p class="lead">Use the username and password given to you by the administrator.</p>
     <form id="loginForm" autocomplete="on">
       <label class="f">Username<input type="text" id="lu" autocomplete="username" autocapitalize="none" required></label>
       <label class="f">Password<input type="password" id="lp" autocomplete="current-password" required></label>
@@ -192,7 +192,7 @@ function shellHTML() {
   const initials = (S.me.display_name || S.me.username).split(/\s+/).map((x) => x[0]).join('').slice(0, 2).toUpperCase();
   return `<header class="appbar">
       <button class="menu-btn" id="menuBtn" aria-label="Menu">☰</button>
-      <a class="logo" href="#dashboard">DMM <span class="mark">Manpower planning</span></a>
+      <a class="logo" href="#dashboard" aria-label="Dashboard">${SAR_MARK}<span class="mark">DMM Manpower planning</span></a>
       <nav class="topnav" id="nav">${nav}</nav><div class="spacer"></div>
       <div class="usermenu"><button id="userBtn" aria-haspopup="true"><span class="avatar">${esc(initials)}</span><span class="who"><b>${esc(S.me.display_name || S.me.username)}</b><span>${roleText}, ${esc(scope)}</span></span>▾</button>
         <div class="dropdown" id="userDrop"><button id="pwBtn">Change password</button><button id="outBtn">Sign out</button></div></div>
