@@ -341,7 +341,9 @@ function viewDashboard(el) {
   const wsList = S.all.workshops;
   const tabs = multiWs() && wsList.length > 1 ? `<div class="tabs" role="tablist">${[['ALL', 'All workshops'], ...wsList.map((w) => [w.id, w.short_name])].map(([id, n]) => `<button role="tab" data-dash="${id}" class="${S.dash === id ? 'on' : ''}" aria-selected="${S.dash === id}">${esc(n)}</button>`).join('')}</div>` : '';
   const title = all ? 'Workshops overview' : (wsList.find((w) => w.id === S.dash) || {}).name || 'Dashboard';
-  const head2 = `<div class="pagebar"><div><div class="crumb">Dashboard</div><h1>${esc(title)}</h1></div><div class="grow"></div>${filtersHTML({ ws: false, period: true, alt: false })}</div>`;
+  const head2 = `<div class="pagebar"><div><div class="crumb">Dashboard</div><h1>${esc(title)}</h1></div><div class="grow"></div>${filtersHTML({ ws: false, period: true, alt: false })}<button class="btn primary" id="pdfBtn" type="button">Export PDF</button></div>`;
+  const now = new Date();
+  const printHead = `<div class="print-head">${SAR_LOGO}<div><h1>${esc(title)}</h1><p>Dashboard report, ${esc(periodLabel())}. Generated ${now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} ${now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.</p></div></div>`;
   const scope = all ? wsList : wsList.filter((w) => w.id === S.dash);
   const results = scope.map((w) => ({ w, r: result(wsData(w.id), S.type, pStart(), false) }));
   const T = sumTot(results.map((x) => x.r.tot));
@@ -368,7 +370,14 @@ function viewDashboard(el) {
     extra = `<section class="panel"><div class="phead"><div class="ttl"><h2>What it takes to close ${periodLabel()}</h2><p>People or overtime needed per section to finish the planned exams</p></div>${canEdit() ? '<a class="btn sm" href="#workload">Enter planned and done exams</a>' : ''}</div>${closeTable(R, d)}</section>`;
   }
   const emptyNote = empty ? `<div class="note warn mb-sm">No planned exams and no roster hours for ${periodLabel()}. ${canEdit() ? 'Enter the planned exams in Workload, or move to another period.' : 'Move to another period with the arrows.'}</div>` : '';
-  el.innerHTML = head2 + tabs + emptyNote + figuresHTML(T) + chart + ledger + extra;
+  el.innerHTML = printHead + head2 + tabs + emptyNote + figuresHTML(T) + chart + ledger + extra;
+  $('#pdfBtn', el).onclick = () => {
+    const t = document.title;
+    document.title = `DMM dashboard ${all ? 'all workshops' : (scope[0] || {}).short_name || ''} ${periodLabel()}`.trim();
+    const back = () => { document.title = t; window.removeEventListener('afterprint', back); };
+    window.addEventListener('afterprint', back);
+    window.print();
+  };
   $$('[data-dash]', el).forEach((b) => (b.onclick = () => { S.dash = b.dataset.dash; if (S.dash !== 'ALL') { S.ws = S.dash; store('mp_ws', S.ws); } render(); }));
 }
 
