@@ -18,6 +18,8 @@ html=f'''<!DOCTYPE html>
 <script>window.APP_CONFIG={json.dumps(cfg)};</script>
 <script>{sbjs.replace('</script>','<\\/script>')}</script>
 <script>{r('node_modules/xlsx/dist/xlsx.full.min.js').replace('</script>','<\\/script>')}</script>
+<script>(function(){{{r('node_modules/xlsx-js-style/dist/xlsx.min.js').replace('</script>','<\\/script>')}
+window.XLSXS = XLSX;}})();</script>
 <script>{r('src/sar-logo.js')}</script>
 <script>{r('src/calc.js')}</script>
 <script>{r('src/app.js')}</script>

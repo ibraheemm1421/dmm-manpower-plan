@@ -496,7 +496,7 @@ function viewRoster(el) {
       <td class="num">${fmt0(r.staffDays)}</td><td class="num">${fmt(r.prod)}</td><td class="num">${fmt(r.ot)}</td></tr>`).join('')).join('');
   const inPeriod = d.status_changes.filter((c) => c.date_to >= R.days[0] && c.date_from <= R.days[R.days.length - 1]).sort((a, b) => a.date_from.localeCompare(b.date_from));
   const empMap = {}; d.employees.forEach((e) => (empMap[e.uid] = e));
-  el.innerHTML = head('Roster and leave', 'Shifts come from each team or person pattern, or from a month plan. Leave, sickness, training, overtime and absence are recorded from one date to another.', ed ? '<button class="btn" id="planMonth">Plan the month</button><button class="btn primary" id="addStatus">Add leave or status</button>' : '') + `
+  el.innerHTML = head('Roster and leave', 'Shifts come from each team or person pattern, or from a month plan. Leave, sickness, training, overtime and absence are recorded from one date to another.', ed ? '<button class="btn" id="rxBtn">Export month to Excel</button><button class="btn" id="planMonth">Plan the month</button><button class="btn primary" id="addStatus">Add leave or status</button>' : '<button class="btn" id="rxBtn">Export month to Excel</button>') + `
   <div class="toolbar"><select id="secSel" aria-label="Section"><option value="">All sections</option>${secs.map((s) => `<option value="${s.id}" ${String(s.id) === S.section ? 'selected' : ''}>${esc(s.section.name)}</option>`).join('')}</select>
     <span class="hint">${ed ? 'Click a day to record leave or a status. Click a name to plan that person\'s month.' : 'View only.'}</span></div>
   <div class="legend"><span><i class="c-work"></i>Working</span><span><i class="c-rest"></i>Rest day</span><span><i class="c-leave"></i>Annual or planned leave</span><span><i class="c-train"></i>Training</span><span><i class="c-sick"></i>Sick</span><span><i class="c-ot"></i>Overtime</span><span><i class="c-abs"></i>Absent</span><span><i class="c-work c-change"></i>Changed from pattern</span><span class="hint">M Morning, A Afternoon, N Night, 12 = 12-hour shift</span></div>
@@ -507,6 +507,7 @@ function viewRoster(el) {
   ${inPeriod.map((c) => { const e = empMap[c.employee_uid] || {}; return `<tr><td>${esc(e.name)}<span class="sub-line">${esc(e.emp_no)}</span></td><td><span class="pill info">${esc(c.status_type === 'Custom' ? 'Shift ' + c.code : c.status_type)}</span></td><td>${dlabel(c.date_from)}</td><td>${dlabel(c.date_to)}</td><td class="num">${Calc.diffDays(c.date_from, c.date_to) + 1}</td><td>${esc(c.notes || '')}</td>
     <td class="actions">${ed ? `<button class="btn sm" data-edit="${c.id}">Edit</button> <button class="btn sm danger" data-del="${c.id}">Delete</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>` : '<p class="hint">Nothing recorded for this period.</p>'}</div>`;
   $('#secSel', el).onchange = (e) => { S.section = e.target.value; viewRoster(el); };
+  $('#rxBtn', el).onclick = exportRosterXlsx;
   if (!ed) return;
   $('#addStatus', el).onclick = () => statusModal({});
   $('#planMonth', el).onclick = () => planMonthModal();
@@ -556,6 +557,92 @@ function statusModal(ch, covering = []) {
     const sq = $('#st_q', ov); if (sq) sq.oninput = () => $$('#st_list label', ov).forEach((l) => l.classList.toggle('hidden', !l.dataset.s.includes(sq.value.toLowerCase())));
     $$('[data-rm]', ov).forEach((b) => (b.onclick = async () => { try { await q(sb.from('status_changes').delete().eq('id', +b.dataset.rm)); await refresh(); toast('Removed', 'ok'); ov.remove(); } catch (e) { fail(e); } }));
   } });
+}
+
+// =====================================================================
+// ROSTER EXPORT: a formatted Excel of the month, one row per person
+// =====================================================================
+const RX = {
+  blue: '0B4F79', blue2: '1976A3', light: 'DCEFF8', ink: '333333', muted: '5A6B78', rule: 'C9D6DF', paper: 'F3F7FA',
+  fills: { M: ['DCEFF8', '0B4F79'], A: ['B9DDF0', '0B4F79'], N: ['0B4F79', 'FFFFFF'], R: ['FFFFFF', '9AA9B4'], leave: ['E3F4EA', '146B3A'], train: ['FFF1D6', '8F5B0A'], sick: ['FBE3E3', 'A61B1B'], abs: ['D62828', 'FFFFFF'], ot: ['1F9D55', 'FFFFFF'], none: ['F3F7FA', 'C9D6DF'] },
+};
+function rxKind(d, code) {
+  const c = d.codeMap[code]; if (!code) return 'none'; if (code === 'R') return 'R';
+  const t = c && c.status_type;
+  if (t === 'Annual Leave' || t === 'Planned Leave') return 'leave'; if (t === 'Training') return 'train'; if (t === 'Sick') return 'sick'; if (t === 'Absent') return 'abs'; if (t === 'Overtime') return 'ot';
+  const l = letterOf(code); return RX.fills[l] ? l : 'M';
+}
+function exportRosterXlsx() {
+  const X = window.XLSXS; if (!X) { toast('Excel library not loaded', 'err'); return; }
+  const d = wsData(), ms = Calc.monthStart(pStart()), R = result(d, 'month', ms), days = R.days, nD = days.length;
+  const wsName = (S.all.workshops.find((w) => w.id === S.ws) || {}).name || S.ws;
+  const title = `${wsName}, roster ${MONTHS_L[+ms.slice(5, 7) - 1]} ${ms.slice(0, 4)}`;
+  const fixed = ['No.', 'Employee', 'Role', 'Team', 'Count'], tail = ['Days', 'Prod h', 'OT h'];
+  const nC = fixed.length + nD + tail.length;
+  const border = { top: { style: 'thin', color: { rgb: RX.rule } }, bottom: { style: 'thin', color: { rgb: RX.rule } }, left: { style: 'thin', color: { rgb: RX.rule } }, right: { style: 'thin', color: { rgb: RX.rule } } };
+  const font = (o = {}) => ({ name: 'Calibri', sz: 10, color: { rgb: RX.ink }, ...o });
+  const cell = (v, s = {}, t) => ({ v: v === undefined || v === null ? '' : v, t: t || (typeof v === 'number' ? 'n' : 's'), s });
+  const aoa = [], merges = [], rowsH = [];
+  const wk = (x) => { const w = Calc.dow(x); return w === 5 || w === 6; };
+  // title block
+  aoa.push([cell(title, { font: font({ sz: 16, bold: true, color: { rgb: RX.blue } }) })]); merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: nC - 1 } }); rowsH.push({ hpt: 26 });
+  aoa.push([cell(`Saudi Arabia Railways, Dammam workshops. Exported ${dlabel(today())} by ${S.me.display_name || S.me.username}. M Morning, A Afternoon, N Night, 12 = 12-hour shift.`, { font: font({ color: { rgb: RX.muted } }) })]); merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: nC - 1 } }); rowsH.push({ hpt: 16 });
+  aoa.push([]); rowsH.push({ hpt: 6 });
+  // two header rows: day number, weekday
+  const hS = (extra = {}) => ({ font: font({ bold: true, color: { rgb: 'FFFFFF' } }), fill: { fgColor: { rgb: RX.blue } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border, ...extra });
+  const hW = (x) => hS({ fill: { fgColor: { rgb: wk(x) ? RX.blue2 : RX.blue } } });
+  const h1 = [...fixed.map((h) => cell(h, hS({ alignment: { horizontal: 'left', vertical: 'center' } }))), ...days.map((x) => cell(+x.slice(8), hW(x), 'n')), ...tail.map((h) => cell(h, hS()))];
+  const h2 = [...fixed.map(() => cell('', hS())), ...days.map((x) => cell(DOWS[Calc.dow(x)].slice(0, 2), hW(x))), ...tail.map(() => cell('', hS()))];
+  const H = aoa.length; aoa.push(h1, h2); rowsH.push({ hpt: 18 }, { hpt: 16 });
+  [...fixed.keys()].forEach((c) => merges.push({ s: { r: H, c }, e: { r: H + 1, c } }));
+  tail.forEach((_, i) => merges.push({ s: { r: H, c: fixed.length + nD + i }, e: { r: H + 1, c: fixed.length + nD + i } }));
+  // body by section
+  const secs = R.sections.filter((s) => s.rows.length);
+  let tot = { days: 0, prod: 0, ot: 0 };
+  secs.forEach((s) => {
+    const r0 = aoa.length;
+    aoa.push([cell(`${s.section.name}   ${s.headcount} people, ${fmt0(s.prod)} productive hours`, { font: font({ bold: true, color: { rgb: RX.blue } }), fill: { fgColor: { rgb: RX.light } }, border }), ...Array(nC - 1).fill(0).map(() => cell('', { fill: { fgColor: { rgb: RX.light } }, border }))]);
+    merges.push({ s: { r: r0, c: 0 }, e: { r: r0, c: nC - 1 } }); rowsH.push({ hpt: 18 });
+    s.rows.forEach((r, i) => {
+      const zebra = i % 2 ? 'FAFCFD' : 'FFFFFF';
+      const base = (o = {}) => ({ font: font(), fill: { fgColor: { rgb: zebra } }, border, alignment: { vertical: 'center' }, ...o });
+      const team = d.teamMap[r.emp.team_id];
+      const row = [cell(r.emp.emp_no, base()), cell(r.emp.name, base({ font: font({ bold: true }) })), cell(r.emp.role, base()), cell(team ? team.name : '', base()), cell(Math.round(r.pct * 100) / 100, base({ numFmt: '0%', alignment: { horizontal: 'center' } }), 'n')];
+      r.cells.forEach((c) => { const k = rxKind(d, c.code), [bg, fg] = RX.fills[k]; row.push(cell(c.code === 'R' ? '·' : shortCode(c.code), { font: font({ bold: k !== 'R', color: { rgb: fg } }), fill: { fgColor: { rgb: bg } }, border, alignment: { horizontal: 'center', vertical: 'center' } })); });
+      row.push(cell(Math.round(r.staffDays), base({ alignment: { horizontal: 'center' } }), 'n'), cell(Math.round(r.prod * 10) / 10, base({ numFmt: '0.0' }), 'n'), cell(Math.round(r.ot * 10) / 10, base({ numFmt: '0.0' }), 'n'));
+      aoa.push(row); rowsH.push({ hpt: 17 });
+      tot.days += r.staffDays; tot.prod += r.prod; tot.ot += r.ot;
+    });
+  });
+  // total
+  const tS = (o = {}) => ({ font: font({ bold: true, color: { rgb: 'FFFFFF' } }), fill: { fgColor: { rgb: RX.blue } }, border, ...o });
+  const rt = aoa.length;
+  aoa.push([cell('Workshop total', tS()), ...Array(fixed.length - 1 + nD).fill(0).map(() => cell('', tS())), cell(Math.round(tot.days), tS({ alignment: { horizontal: 'center' } }), 'n'), cell(Math.round(tot.prod), tS({ numFmt: '#,##0' }), 'n'), cell(Math.round(tot.ot), tS({ numFmt: '#,##0' }), 'n')]);
+  merges.push({ s: { r: rt, c: 0 }, e: { r: rt, c: fixed.length + nD - 1 } }); rowsH.push({ hpt: 20 });
+  // legend
+  aoa.push([]); rowsH.push({ hpt: 8 });
+  const leg = [['M', 'Morning'], ['A', 'Afternoon'], ['N', 'Night'], ['R', 'Rest'], ['leave', 'Leave'], ['train', 'Training'], ['sick', 'Sick'], ['abs', 'Absent'], ['ot', 'Overtime']];
+  const lr = [cell('Key', { font: font({ bold: true }) })];
+  leg.forEach(([k, t]) => { const [bg, fg] = RX.fills[k]; lr.push(cell(t, { font: font({ bold: true, color: { rgb: fg } }), fill: { fgColor: { rgb: bg } }, border, alignment: { horizontal: 'center' } })); });
+  aoa.push(lr); rowsH.push({ hpt: 18 });
+  const ws = X.utils.aoa_to_sheet(aoa);
+  ws['!merges'] = merges; ws['!rows'] = rowsH;
+  ws['!cols'] = [{ wch: 8 }, { wch: 28 }, { wch: 14 }, { wch: 16 }, { wch: 7 }, ...days.map(() => ({ wch: 4.2 })), { wch: 6 }, { wch: 8 }, { wch: 7 }];
+  // the key cells sit under columns of width 4: put them under the name columns instead
+  ws['!cols'][1] = { wch: 28 };
+  ws['!freeze'] = { xSplit: 2, ySplit: H + 2 };
+  ws['!views'] = [{ state: 'frozen', xSplit: 2, ySplit: H + 2, topLeftCell: X.utils.encode_cell({ r: H + 2, c: 2 }) }];
+  ws['!pageSetup'] = { orientation: 'landscape', paperSize: 9, fitToWidth: 1, fitToHeight: 0 };
+  // summary sheet
+  const sum = [[cell('Section', hS({ alignment: { horizontal: 'left' } })), cell('People', hS()), cell('Productive h', hS()), cell('OT h', hS()), cell('People on leave', hS())],
+    ...secs.map((s) => [cell(s.section.name, { font: font({ bold: true }), border }), cell(s.headcount, { font: font(), border, alignment: { horizontal: 'center' } }, 'n'), cell(Math.round(s.prod), { font: font(), border, numFmt: '#,##0' }, 'n'), cell(Math.round(s.ot), { font: font(), border, numFmt: '#,##0' }, 'n'), cell(s.alTechs, { font: font(), border, alignment: { horizontal: 'center' } }, 'n')]),
+    [cell('Total', tS()), cell(secs.reduce((a, s) => a + s.headcount, 0), tS({ alignment: { horizontal: 'center' } }), 'n'), cell(Math.round(tot.prod), tS({ numFmt: '#,##0' }), 'n'), cell(Math.round(tot.ot), tS({ numFmt: '#,##0' }), 'n'), cell(secs.reduce((a, s) => a + s.alTechs, 0), tS({ alignment: { horizontal: 'center' } }), 'n')]];
+  const ws2 = X.utils.aoa_to_sheet(sum); ws2['!cols'] = [{ wch: 26 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 16 }];
+  const wb = X.utils.book_new();
+  X.utils.book_append_sheet(wb, ws, 'Roster');
+  X.utils.book_append_sheet(wb, ws2, 'Summary');
+  X.writeFile(wb, `Roster ${wsName} ${ms.slice(0, 7)}.xlsx`);
+  toast('Roster exported', 'ok');
 }
 
 // =====================================================================
