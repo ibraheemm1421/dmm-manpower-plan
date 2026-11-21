@@ -315,3 +315,14 @@ body.printing .print-skip { display: none; }
 .pm-cal th { font-size: var(--text-xs); }
 .cb-chips .btn { white-space: normal; text-align: left; }
 .pm-cont { align-self: end; }
+
+/* roster printed across pages, scaled to the page width */
+body.printing .page.fit.fitw { width: var(--print-w, 1400px); }
+body.printing .fitw .roster-wrap { max-height: none; overflow: visible; border: 0; }
+body.printing .fitw .roster th.left, body.printing .fitw .roster td.left, body.printing .fitw .roster-wrap thead th { position: static; }
+body.printing .fitw .roster thead { display: table-header-group; }
+body.printing .fitw .roster tr { break-inside: avoid; }
+body.printing .fitw .panel, body.printing .fitw .toolbar { display: none !important; }
+body.printing .fitw .legend { display: flex !important; margin-bottom: var(--space-xs); }
+body.printing .fitw .roster .linkbtn { color: var(--color-ink); font-weight: 700; }
+body.printing .fitw .pill { display: none; }

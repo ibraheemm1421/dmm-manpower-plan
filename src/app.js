@@ -226,11 +226,16 @@ function fitPrint() {
   document.body.classList.add('printing');
   if (!$('.print-head', page)) return;
   page.classList.add('fit'); page.style.setProperty('--print-zoom', 1);
-  const W = 1400, availW = 1062, availH = 733; // A4 landscape at 96 dpi minus 8 mm margins
+  const availW = 1062, availH = 733; // A4 landscape at 96 dpi minus 8 mm margins
+  if ($('.print-head', page).dataset.fit === 'width') { // long tables: fit the width, let it run onto more pages
+    page.classList.add('fitw'); const t = $('table.roster', page); const W = Math.max(1000, (t ? t.scrollWidth : 1400) + 4);
+    page.style.setProperty('--print-w', W + 'px'); page.style.setProperty('--print-zoom', Math.min(1, (availW / W) * 0.98).toFixed(3)); return;
+  }
+  const W = 1400;
   const z = Math.min(availW / W, availH / page.scrollHeight) * 0.97;
   page.style.setProperty('--print-zoom', z.toFixed(3));
 }
-function unfitPrint() { document.body.classList.remove('printing'); const page = $('#view'); if (page) { page.classList.remove('fit'); page.style.removeProperty('--print-zoom'); } }
+function unfitPrint() { document.body.classList.remove('printing'); const page = $('#view'); if (page) { page.classList.remove('fit', 'fitw'); page.style.removeProperty('--print-w'); page.style.removeProperty('--print-zoom'); } }
 window.addEventListener('beforeprint', fitPrint);
 window.addEventListener('afterprint', unfitPrint);
 function render() {
@@ -496,7 +501,10 @@ function viewRoster(el) {
       <td class="num">${fmt0(r.staffDays)}</td><td class="num">${fmt(r.prod)}</td><td class="num">${fmt(r.ot)}</td></tr>`).join('')).join('');
   const inPeriod = d.status_changes.filter((c) => c.date_to >= R.days[0] && c.date_from <= R.days[R.days.length - 1]).sort((a, b) => a.date_from.localeCompare(b.date_from));
   const empMap = {}; d.employees.forEach((e) => (empMap[e.uid] = e));
-  el.innerHTML = head('Roster and leave', 'Shifts come from each team or person pattern, or from a month plan. Leave, sickness, training, overtime and absence are recorded from one date to another.', ed ? '<button class="btn" id="rxBtn">Export month to Excel</button><button class="btn" id="planMonth">Plan the month</button><button class="btn primary" id="addStatus">Add leave or status</button>' : '<button class="btn" id="rxBtn">Export month to Excel</button>') + `
+  const wsN = (S.all.workshops.find((w) => w.id === S.ws) || {}).name || '';
+  const pnow = new Date();
+  const rHead = `<div class="print-head" data-fit="width">${SAR_LOGO}<div><h1>${esc(wsN)}, roster ${esc(periodLabel())}</h1><p>${S.section ? esc((secs.find((x) => String(x.id) === S.section) || { section: {} }).section.name) + '. ' : ''}M Morning, A Afternoon, N Night, 12 = 12-hour shift. Generated ${pnow.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}.</p></div></div>`;
+  el.innerHTML = rHead + head('Roster and leave', 'Shifts come from each team or person pattern, or from a month plan. Leave, sickness, training, overtime and absence are recorded from one date to another.', ed ? '<button class="btn" id="rpBtn">Export PDF</button><button class="btn" id="rxBtn">Export month to Excel</button><button class="btn" id="planMonth">Plan the month</button><button class="btn primary" id="addStatus">Add leave or status</button>' : '<button class="btn" id="rpBtn">Export PDF</button><button class="btn" id="rxBtn">Export month to Excel</button>') + `
   <div class="toolbar"><select id="secSel" aria-label="Section"><option value="">All sections</option>${secs.map((s) => `<option value="${s.id}" ${String(s.id) === S.section ? 'selected' : ''}>${esc(s.section.name)}</option>`).join('')}</select>
     <span class="hint">${ed ? 'Click a day to record leave or a status. Click a name to plan that person\'s month.' : 'View only.'}</span></div>
   <div class="legend"><span><i class="c-work"></i>Working</span><span><i class="c-rest"></i>Rest day</span><span><i class="c-leave"></i>Annual or planned leave</span><span><i class="c-train"></i>Training</span><span><i class="c-sick"></i>Sick</span><span><i class="c-ot"></i>Overtime</span><span><i class="c-abs"></i>Absent</span><span><i class="c-work c-change"></i>Changed from pattern</span><span class="hint">M Morning, A Afternoon, N Night, 12 = 12-hour shift</span></div>
@@ -508,6 +516,11 @@ function viewRoster(el) {
     <td class="actions">${ed ? `<button class="btn sm" data-edit="${c.id}">Edit</button> <button class="btn sm danger" data-del="${c.id}">Delete</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>` : '<p class="hint">Nothing recorded for this period.</p>'}</div>`;
   $('#secSel', el).onchange = (e) => { S.section = e.target.value; viewRoster(el); };
   $('#rxBtn', el).onclick = exportRosterXlsx;
+  $('#rpBtn', el).onclick = () => {
+    const t = document.title; document.title = `Roster ${wsN} ${periodLabel()}`;
+    const back = () => { document.title = t; window.removeEventListener('afterprint', back); };
+    window.addEventListener('afterprint', back); window.print();
+  };
   if (!ed) return;
   $('#addStatus', el).onclick = () => statusModal({});
   $('#planMonth', el).onclick = () => planMonthModal();
