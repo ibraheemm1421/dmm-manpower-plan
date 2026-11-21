@@ -1196,11 +1196,12 @@ function planMonthModal(preUid) {
   const emps = d.employees.filter((e) => e.status === 'Active');
   const pre = preUid && d.planMap[preUid] && d.planMap[preUid][m0];
   const st = { month: m0, hrs: pre ? pre.shift_hrs : (Calc.planOf && (d.patMap[(d.teamMap[(emps.find((e) => e.uid === preUid) || {}).team_id] || {}).pattern_main] || {}).shift_hrs) || 8, start: pre && pre.cycle_start ? pre.cycle_start : m0 + '-01', over: {}, cycle: pre && pre.cycle ? pre.cycle : [] };
-  const daysOf = () => Calc.periodDays('month', st.month + '-01');
+  const daysOf = (mo = st.month) => Calc.periodDays('month', mo + '-01');
   const body = `<div class="grid3">
       <label class="f">Month<input type="month" id="pm_m" value="${st.month}"></label>
       <div class="f"><span>Shift length</span><div class="seg" id="pm_h"><button type="button" data-h="8">8 hours</button><button type="button" data-h="12">12 hours</button></div></div>
-      <label class="f">Cycle day 1 is<input type="date" id="pm_s" value="${st.start}"></label></div>
+      <label class="f">Cycle day 1 is<input type="date" id="pm_s" value="${st.start}"></label>
+      <label class="f">For how long<select id="pm_n">${[1, 2, 3, 4, 6, 12].map((n) => `<option value="${n}">${n === 1 ? 'This month only' : n + ' months'}</option>`).join('')}</select></label></div>
     <div class="grid2 pm-top">
       <div><div class="hint mb-2xs">Who (tick one or more)</div>
         <div class="row mb-sm"><input class="flex1" type="text" id="pm_q" placeholder="Search name, number or team"><select id="pm_team" aria-label="Tick a whole team"><option value="">Tick a team</option>${d.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>
@@ -1211,19 +1212,24 @@ function planMonthModal(preUid) {
     { label: 'Remove plan', cls: 'danger', action: async (o) => {
       const ids = $$('#pm_list input:checked', o).map((i) => +i.value);
       if (!ids.length) { toast('Tick the people whose plan you want to remove', 'err'); return false; }
-      await q(sb.from('month_plans').delete().in('employee_uid', ids).eq('month', st.month + '-01'));
-      await refresh(); toast('Plan removed. Those days follow the pattern again', 'ok');
+      const nM = +$('#pm_n', o).value || 1, months = Array.from({ length: nM }, (_, k) => Calc.shiftPeriod('month', st.month + '-01', k));
+      await q(sb.from('month_plans').delete().in('employee_uid', ids).in('month', months));
+      await refresh(); toast(`Plan removed for ${nM === 1 ? 'this month' : nM + ' months'}. Those days follow the pattern again`, 'ok');
     } },
     { label: 'Cancel' },
     { label: 'Save plan', cls: 'primary', action: async (o) => {
       const ids = $$('#pm_list input:checked', o).map((i) => +i.value);
       if (!ids.length) { toast('Tick at least one person', 'err'); return false; }
       if (!st.cycle.length) { toast('Build the cycle first: pick a quick start or add days', 'err'); return false; }
-      const codes = monthCodes();
-      await q(sb.from('month_plans').upsert(ids.map((uid) => ({ workshop_id: S.ws, employee_uid: uid, month: st.month + '-01', shift_hrs: st.hrs, codes, cycle: st.cycle, cycle_start: st.start, updated_at: new Date().toISOString() })), { onConflict: 'employee_uid,month' }));
-      await refresh(); toast(`Plan saved for ${ids.length} ${ids.length === 1 ? 'person' : 'people'}`, 'ok');
+      const nM = +$('#pm_n', o).value || 1, rows = [];
+      for (let k = 0; k < nM; k++) {
+        const mo = Calc.shiftPeriod('month', st.month + '-01', k), codes = monthCodes(mo.slice(0, 7));
+        ids.forEach((uid) => rows.push({ workshop_id: S.ws, employee_uid: uid, month: mo, shift_hrs: st.hrs, codes, cycle: st.cycle, cycle_start: st.start, updated_at: new Date().toISOString() }));
+      }
+      await q(sb.from('month_plans').upsert(rows, { onConflict: 'employee_uid,month' }));
+      await refresh(); toast(`Plan saved for ${ids.length} ${ids.length === 1 ? 'person' : 'people'}, ${nM === 1 ? 'this month' : nM + ' months'}`, 'ok');
     } }] });
-  const monthCodes = () => daysOf().map((day) => {
+  const monthCodes = (mo = st.month) => daysOf(mo).map((day) => {
     if (st.over[day]) return st.over[day];
     if (!st.cycle.length) return 'R';
     const n = st.cycle.length, k = ((Calc.diffDays(st.start, day) % n) + n) % n; return st.cycle[k];
@@ -1233,7 +1239,7 @@ function planMonthModal(preUid) {
     const prod = codes.reduce((a, c) => a + Number((d.codeMap[c] || {}).prod_hrs || 0), 0), work = codes.filter((c) => c !== 'R').length;
     const ids = $$('#pm_list input:checked', ov).map((i) => +i.value);
     const had = ids.filter((u) => d.planMap[u] && d.planMap[u][st.month]).length;
-    $('#pm_prev', ov).innerHTML = `<div class="pm-sum"><b>${MONTHS_L[+st.month.slice(5) - 1]} ${st.month.slice(0, 4)}</b><span>${work} working days, ${fmt0(prod)} productive hours a person</span><span>${ids.length} ${ids.length === 1 ? 'person' : 'people'} ticked${had ? `, ${had} already planned (will be replaced)` : ''}</span><span class="hint">Click a day to change it</span></div>
+    $('#pm_prev', ov).innerHTML = `<div class="pm-sum"><b>${MONTHS_L[+st.month.slice(5) - 1]} ${st.month.slice(0, 4)}</b><span>${work} working days, ${fmt0(prod)} productive hours a person</span><span>${ids.length} ${ids.length === 1 ? 'person' : 'people'} ticked${had ? `, ${had} already planned (will be replaced)` : ''}</span><span class="hint">Click a day to change it. With more than one month the cycle carries on without a break.</span></div>
       <div class="tbl-wrap"><table class="roster pm-cal"><thead><tr>${days.map((x) => { const w = Calc.dow(x); return `<th class="${w === 5 || w === 6 ? 'wk' : ''}">${DOWS[w].slice(0, 2)}<br>${+x.slice(8)}</th>`; }).join('')}</tr></thead>
       <tbody><tr>${codes.map((c, i) => `<td class="cell ${codeClass(d, c)} ${st.over[days[i]] ? 'c-change' : ''}" data-day="${days[i]}" title="${esc(c)}">${esc(letterOf(c))}</td>`).join('')}</tr></tbody></table></div>`;
     $$('[data-day]', ov).forEach((td) => (td.onclick = () => { const cur = monthCodes()[days.indexOf(td.dataset.day)]; const next = order[(order.indexOf(cur) + 1) % order.length]; st.over[td.dataset.day] = next; preview(); }));
