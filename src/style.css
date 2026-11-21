@@ -102,7 +102,7 @@ input[type=number] { text-align: right; font-variant-numeric: tabular-nums; }
 input:disabled, select:disabled, textarea:disabled { background: var(--color-paper-3); color: var(--color-muted); opacity: 0.55; cursor: not-allowed; }
 input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--color-accent); }
 .wsselect { font-weight: 600; color: var(--color-brand); }
-label.f { display: flex; flex-direction: column; gap: var(--space-2xs); font-size: var(--text-sm); color: var(--color-muted); font-weight: 500; }
+label.f, div.f { display: flex; flex-direction: column; gap: var(--space-2xs); font-size: var(--text-sm); color: var(--color-muted); font-weight: 500; }
 label.f input, label.f select, label.f textarea { color: var(--color-ink); font-size: var(--text-md); }
 .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-sm); }
 .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-sm); }
@@ -292,3 +292,26 @@ body.printing .print-skip { display: none; }
 .roster td.secinfo { text-align: left; font-size: var(--text-xs); color: var(--color-muted); font-weight: 400; }
 .ledger tr.cur td { background: color-mix(in oklab, var(--color-brand-soft) 55%, var(--color-paper-2)); }
 .ledger tr.total .vizcell svg { visibility: hidden; }
+
+/* ---------- cycle builder and month plan ---------- */
+.cb { display: flex; flex-direction: column; gap: var(--space-xs); border: 1px solid var(--color-rule); border-radius: var(--radius-card); padding: var(--space-sm) var(--space-md); background: var(--color-paper-3); }
+.cb-row { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: var(--space-sm); align-items: start; }
+.cb-lab { font-size: var(--text-sm); color: var(--color-muted); font-weight: 600; padding-top: var(--space-2xs); }
+.cb-chips { display: flex; flex-wrap: wrap; gap: var(--space-2xs); align-items: center; }
+.cb-block { display: inline-flex; align-items: center; gap: var(--space-2xs); min-height: 32px; padding-inline: var(--space-sm) var(--space-2xs); border-radius: var(--radius-control); font-weight: 700; font-variant-numeric: tabular-nums; }
+.cb-block button { border: 0; background: none; cursor: pointer; font-size: var(--text-md); line-height: 1; color: inherit; width: 24px; height: 24px; border-radius: var(--radius-control); }
+.cb-block button:hover { background: color-mix(in oklab, currentColor 14%, transparent); }
+.k-M { background: var(--color-brand-soft); color: var(--color-brand); }
+.k-A { background: var(--color-warn-soft); color: var(--color-warn); }
+.k-N { background: var(--color-ink); color: var(--color-accent-ink); }
+.k-R { background: var(--color-paper-2); color: var(--color-muted); border: 1px solid var(--color-rule-2); }
+.btn.cb-k { border-color: transparent; }
+.btn.cb-k:hover { border-color: currentColor; }
+.pm-top { align-items: start; margin-top: var(--space-sm); }
+.pm-top .checklist { max-height: 12rem; }
+.pm-cont { justify-content: flex-end; }
+.pm-sum { display: flex; flex-wrap: wrap; gap: var(--space-md); align-items: baseline; margin: var(--space-sm) 0 var(--space-xs); font-size: var(--text-sm); }
+.pm-cal td.cell { min-width: 28px; cursor: pointer; }
+.pm-cal th { font-size: var(--text-xs); }
+.cb-chips .btn { white-space: normal; text-align: left; }
+.pm-cont { align-self: end; }

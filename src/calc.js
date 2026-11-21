@@ -41,6 +41,8 @@ const Calc = (() => {
     d.secMap = {}; raw.sections.forEach((s) => (d.secMap[s.id] = s));
     d.changesByEmp = {};
     [...raw.status_changes].sort((a, b) => (a.id || 0) - (b.id || 0)).forEach((c) => (d.changesByEmp[c.employee_uid] = d.changesByEmp[c.employee_uid] || []).push(c));
+    d.planMap = {};
+    (raw.month_plans || []).forEach((m) => { (d.planMap[m.employee_uid] = d.planMap[m.employee_uid] || {})[String(m.month).slice(0, 7)] = m; });
     d.hasAlt = raw.teams.some((t) => t.pattern_alt) || raw.employees.some((e) => e.pattern_alt);
     return d;
   }
@@ -65,11 +67,14 @@ const Calc = (() => {
     const hit = all.find((c) => c.shift_type === shift) || all.find((c) => c.shift_type === '-') || all[0];
     return hit ? hit.code : '';
   }
+  const planOf = (emp, day, d) => (d.planMap && d.planMap[emp.uid] && d.planMap[emp.uid][day.slice(0, 7)]) || null;
   function dayCode(emp, day, d, pattern) {
     if (emp.start_date && day < emp.start_date) return { code: '', source: '' };
     if (emp.end_date && day > emp.end_date) return { code: '', source: '' };
-    const base = baseCode(pattern, day);
-    let code = base, source = 'pattern', changeId = null;
+    const plan = planOf(emp, day, d);
+    const base = plan ? plan.codes[+day.slice(8) - 1] || 'R' : baseCode(pattern, day);
+    if (plan) pattern = { shift_hrs: plan.shift_hrs };
+    let code = base, source = plan ? 'plan' : 'pattern', changeId = null;
     for (const ch of d.changesByEmp[emp.uid] || []) {
       if (day < ch.date_from || day > ch.date_to) continue;
       const anyDay = ch.status_type === 'Overtime' || ch.status_type === 'Custom';
@@ -125,7 +130,9 @@ const Calc = (() => {
       s.rows.push(r); s.prod += r.prod; s.ot += r.ot; s.paid += r.paid; s.staffDays += r.staffDays;
       if (emp.status === 'Active') s.headcount++;
       s.fte += pct;
-      if (pattern && pattern.shift_hrs === 12) s.w12 += pct; else s.w8 += pct;
+      const plan0 = planOf(emp, days[0], d);
+      const hrs = plan0 ? plan0.shift_hrs : pattern && pattern.shift_hrs;
+      if (hrs === 12) s.w12 += pct; else s.w8 += pct;
       if (r.alDays && emp.status === 'Active' && pct > 0) { s.alTechs++; s.alDays += r.alDays; }
     }
     d.exam_types.filter((x) => x.active).forEach((x) => {
@@ -169,6 +176,6 @@ const Calc = (() => {
     return { days, rows, sections, tot: T, type, alt };
   }
 
-  return { compute, indexData, periodDays, periodStart, shiftPeriod, weekStart, monthStart, addDays, diffDays, dow, iso, countedPct, sectionOf, workdays, examCount };
+  return { planOf, compute, indexData, periodDays, periodStart, shiftPeriod, weekStart, monthStart, addDays, diffDays, dow, iso, countedPct, sectionOf, workdays, examCount };
 })();
 if (typeof module !== 'undefined') module.exports = Calc;

@@ -4,9 +4,12 @@
 const CFG = window.APP_CONFIG;
 const sb = window.supabase.createClient(CFG.url, CFG.key, { auth: { persistSession: true, autoRefreshToken: true } });
 const EMAIL_DOMAIN = '@dmm-mp.local';
+// codes renamed on 21 Nov 2026 (8 hr M/A/N, 12 hr M/N, absent AB); old Excel files are converted on import
+const OLD_CODES = { WAGON: { 'E - 8hr': 'M - 8hr', 'D - 8hr': 'M - 8hr', 'L - 8hr': 'A - 8hr', 'D - 12hr': 'M - 12hr', A: 'AB' }, OH10: { 'E - 8hr': 'M - 8hr', 'D - 8hr': 'M - 8hr', 'L - 8hr': 'A - 8hr', 'D - 12hr': 'M - 12hr', A: 'AB' }, LOCO: { 'D - 8hr': 'M - 8hr', 'E - 8hr': 'N - 8hr', 'D - 12hr': 'M - 12hr', 'E - 12hr': 'N - 12hr', A: 'AB' } };
+const newCode = (ws, c) => ((OLD_CODES[ws] || {})[c]) || c;
 const STATUS_TYPES = ['Annual Leave', 'Planned Leave', 'Sick', 'Training', 'Overtime', 'Absent', 'Custom'];
 const ROLES = ['Technician', 'Senior Technician', 'Team Leader', 'Foreman', 'Office', 'Data Entry', 'Tools Office'];
-const TABLES = ['workshops', 'settings', 'sections', 'shift_codes', 'patterns', 'teams', 'employees', 'status_changes', 'exam_types', 'workload_counts'];
+const TABLES = ['workshops', 'settings', 'sections', 'shift_codes', 'patterns', 'teams', 'employees', 'status_changes', 'exam_types', 'workload_counts', 'month_plans'];
 
 const store = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } };
 const S = {
@@ -66,6 +69,7 @@ function wsData(id = S.ws) {
     teams: f('teams').sort((a, b) => a.sort - b.sort),
     employees: f('employees'),
     status_changes: f('status_changes'),
+    month_plans: f('month_plans'),
     exam_types: f('exam_types').sort((a, b) => a.sort - b.sort || a.id - b.id),
   });
   const teamSort = (e) => { const t = d.teamMap[e.team_id]; return t ? t.sort : 999; };
@@ -486,16 +490,16 @@ function viewRoster(el) {
   const show = S.section ? secs.filter((s) => String(s.id) === S.section) : secs;
   const head1 = R.days.map((x) => { const w = Calc.dow(x); return `<th class="${w === 5 || w === 6 ? 'wk' : ''}">${DOWS[w]}<br>${+x.slice(8)}</th>`; }).join('');
   const body = show.map((s) => `<tr class="group"><td class="left" colspan="2">${esc(s.section.name)}</td><td class="secinfo" colspan="${R.days.length + 3}">${fmt0(s.prod)} productive h, ${s.headcount} people</td></tr>` + s.rows.map((r) => `<tr>
-      <td class="left"><b>${esc(r.emp.name)}</b><span class="sub-line">${esc(r.emp.emp_no)}, ${esc(r.emp.role)}${d.teamMap[r.emp.team_id] ? ', ' + esc(d.teamMap[r.emp.team_id].name) : ''}${r.emp.status !== 'Active' ? ` <span class="pill muted">${esc(r.emp.status)}</span>` : ''}</span></td>
+      <td class="left">${ed ? `<button class="linkbtn" data-plan="${r.emp.uid}" title="Plan this person's month">${esc(r.emp.name)}</button>` : `<b>${esc(r.emp.name)}</b>`}${d.planMap[r.emp.uid] && d.planMap[r.emp.uid][R.days[0].slice(0, 7)] ? ' <span class="pill info">Planned month</span>' : ''}<span class="sub-line">${esc(r.emp.emp_no)}, ${esc(r.emp.role)}${d.teamMap[r.emp.team_id] ? ', ' + esc(d.teamMap[r.emp.team_id].name) : ''}${r.emp.status !== 'Active' ? ` <span class="pill muted">${esc(r.emp.status)}</span>` : ''}</span></td>
       <td>${pct(r.pct)}</td>
       ${r.cells.map((c) => `<td class="cell ${codeClass(d, c.code)} ${c.source === 'change' ? 'c-change' : ''}" data-e="${r.emp.uid}" data-d="${c.day}" title="${esc(dlabel(c.day) + ': ' + (c.code || 'not on roster'))}">${esc(shortCode(c.code))}</td>`).join('')}
       <td class="num">${fmt0(r.staffDays)}</td><td class="num">${fmt(r.prod)}</td><td class="num">${fmt(r.ot)}</td></tr>`).join('')).join('');
   const inPeriod = d.status_changes.filter((c) => c.date_to >= R.days[0] && c.date_from <= R.days[R.days.length - 1]).sort((a, b) => a.date_from.localeCompare(b.date_from));
   const empMap = {}; d.employees.forEach((e) => (empMap[e.uid] = e));
-  el.innerHTML = head('Roster and leave', 'Shifts come from each team or person pattern. Leave, sickness, training, overtime and absence are recorded from one date to another.', ed ? '<button class="btn primary" id="addStatus">Add leave or status</button>' : '') + `
+  el.innerHTML = head('Roster and leave', 'Shifts come from each team or person pattern, or from a month plan. Leave, sickness, training, overtime and absence are recorded from one date to another.', ed ? '<button class="btn" id="planMonth">Plan the month</button><button class="btn primary" id="addStatus">Add leave or status</button>' : '') + `
   <div class="toolbar"><select id="secSel" aria-label="Section"><option value="">All sections</option>${secs.map((s) => `<option value="${s.id}" ${String(s.id) === S.section ? 'selected' : ''}>${esc(s.section.name)}</option>`).join('')}</select>
-    <span class="hint">${ed ? 'Click a day to record leave or a status for that person.' : 'View only.'}</span></div>
-  <div class="legend"><span><i class="c-work"></i>Working</span><span><i class="c-rest"></i>Rest day</span><span><i class="c-leave"></i>Annual or planned leave</span><span><i class="c-train"></i>Training</span><span><i class="c-sick"></i>Sick</span><span><i class="c-ot"></i>Overtime</span><span><i class="c-abs"></i>Absent</span><span><i class="c-work c-change"></i>Changed from pattern</span></div>
+    <span class="hint">${ed ? 'Click a day to record leave or a status. Click a name to plan that person\'s month.' : 'View only.'}</span></div>
+  <div class="legend"><span><i class="c-work"></i>Working</span><span><i class="c-rest"></i>Rest day</span><span><i class="c-leave"></i>Annual or planned leave</span><span><i class="c-train"></i>Training</span><span><i class="c-sick"></i>Sick</span><span><i class="c-ot"></i>Overtime</span><span><i class="c-abs"></i>Absent</span><span><i class="c-work c-change"></i>Changed from pattern</span><span class="hint">M Morning, A Afternoon, N Night, 12 = 12-hour shift</span></div>
   <div class="tbl-wrap roster-wrap"><table class="roster ${ed ? 'edit' : ''}"><thead><tr><th class="left">Employee</th><th>Count</th>${head1}<th>Days</th><th>Prod h</th><th>OT h</th></tr></thead>
   <tbody>${body}</tbody></table></div>
   <div class="panel mt-lg"><div class="phead"><h2>Leave and status in this period</h2><span class="hint">${inPeriod.length} records</span></div>
@@ -505,6 +509,8 @@ function viewRoster(el) {
   $('#secSel', el).onchange = (e) => { S.section = e.target.value; viewRoster(el); };
   if (!ed) return;
   $('#addStatus', el).onclick = () => statusModal({});
+  $('#planMonth', el).onclick = () => planMonthModal();
+  $$('[data-plan]', el).forEach((b) => (b.onclick = () => planMonthModal(+b.dataset.plan)));
   $$('td.cell', el).forEach((td) => (td.onclick = () => {
     const uid = +td.dataset.e, day = td.dataset.d;
     const covering = d.status_changes.filter((c) => c.employee_uid === uid && c.date_from <= day && c.date_to >= day);
@@ -550,6 +556,122 @@ function statusModal(ch, covering = []) {
     const sq = $('#st_q', ov); if (sq) sq.oninput = () => $$('#st_list label', ov).forEach((l) => l.classList.toggle('hidden', !l.dataset.s.includes(sq.value.toLowerCase())));
     $$('[data-rm]', ov).forEach((b) => (b.onclick = async () => { try { await q(sb.from('status_changes').delete().eq('id', +b.dataset.rm)); await refresh(); toast('Removed', 'ok'); ov.remove(); } catch (e) { fail(e); } }));
   } });
+}
+
+// =====================================================================
+// SHIFT CYCLE BUILDER (used by Plan month and by Shift patterns)
+// =====================================================================
+const SHIFT_WORDS = { M: 'Morning', A: 'Afternoon', N: 'Night', R: 'Rest' };
+const letterOf = (code) => (code === 'R' ? 'R' : (code || '').charAt(0));
+const TEMPLATES = {
+  8: [['Morning, Sun to Thu', [[5, 'M'], [2, 'R']], true], ['Afternoon, Sun to Thu', [[5, 'A'], [2, 'R']], true], ['Night, Sun to Thu', [[5, 'N'], [2, 'R']], true],
+      ['Week Morning, week Afternoon', [[5, 'M'], [2, 'R'], [5, 'A'], [2, 'R']], true], ['Morning, Afternoon, Night by week', [[5, 'M'], [2, 'R'], [5, 'A'], [2, 'R'], [5, 'N'], [2, 'R']], true]],
+  12: [['4 on 4 off, Morning', [[4, 'M'], [4, 'R']]], ['4 on 4 off, Night', [[4, 'N'], [4, 'R']]], ['4 Morning, 4 off, 4 Night, 4 off', [[4, 'M'], [4, 'R'], [4, 'N'], [4, 'R']]],
+       ['4 on 4 off: 2 rounds Morning, 2 rounds Night', [[4, 'M'], [4, 'R'], [4, 'M'], [4, 'R'], [4, 'N'], [4, 'R'], [4, 'N'], [4, 'R']]], ['2 Morning, 2 Night, 4 off', [[2, 'M'], [2, 'N'], [4, 'R']]]],
+};
+function workCodes(d, hrs) {
+  const out = {};
+  d.shift_codes.filter((c) => c.shift_type === String(hrs) && !c.status_type && Number(c.prod_hrs) > 0).forEach((c) => { const l = letterOf(c.code); if (!out[l]) out[l] = c.code; });
+  out.R = 'R'; return out; // { M: 'M - 8hr', A: 'A - 8hr', N: 'N - 8hr', R: 'R' }
+}
+const toBlocks = (cycle) => cycle.reduce((b, c) => { const l = letterOf(c); if (b.length && b[b.length - 1][1] === l) b[b.length - 1][0]++; else b.push([1, l]); return b; }, []);
+// one builder instance inside a modal; onChange fires with the expanded cycle (shift codes)
+function cycleBuilder(host, d, { hrs = 8, blocks = [], onChange }) {
+  const st = { hrs, blocks: blocks.map((b) => [...b]) };
+  const codes = () => workCodes(d, st.hrs);
+  const cycle = () => { const m = codes(); return st.blocks.flatMap(([n, l]) => Array(n).fill(m[l] || 'R')); };
+  const draw = () => {
+    const m = codes(), letters = Object.keys(m);
+    host.innerHTML = `<div class="cb">
+      <div class="cb-row"><span class="cb-lab">Quick start</span><div class="cb-chips">${TEMPLATES[st.hrs].map((t, i) => `<button type="button" class="btn sm" data-tpl="${i}">${esc(t[0])}</button>`).join('')}</div></div>
+      <div class="cb-row"><span class="cb-lab">Add days</span><div class="cb-chips"><input type="number" class="w-xs" id="cb_n" min="1" max="31" value="${st.hrs === 12 ? 4 : 5}" aria-label="Number of days"><span class="hint">days of</span>
+        ${letters.map((l) => `<button type="button" class="btn sm cb-k k-${l}" data-add="${l}">${l} ${SHIFT_WORDS[l] || ''}</button>`).join('')}</div></div>
+      <div class="cb-row"><span class="cb-lab">The cycle</span><div class="cb-chips" id="cb_list">${st.blocks.length ? st.blocks.map(([n, l], i) => `<span class="cb-block k-${l}">${n} × ${l}<button type="button" aria-label="Remove" data-rm="${i}">×</button></span>`).join('') : '<span class="hint">Empty. Pick a quick start or add days.</span>'}
+        ${st.blocks.length ? `<button type="button" class="linkbtn" id="cb_clear">Clear</button><span class="hint">${cycle().length} days, then it repeats</span>` : ''}</div></div>
+    </div>`;
+    $$('[data-tpl]', host).forEach((b) => (b.onclick = () => { const t = TEMPLATES[st.hrs][+b.dataset.tpl]; st.blocks = t[1].map((x) => [...x]); st.weekly = !!t[2]; draw(); onChange && onChange(cycle(), st); }));
+    $$('[data-add]', host).forEach((b) => (b.onclick = () => { const n = Math.max(1, Math.min(31, +$('#cb_n', host).value || 1)); const l = b.dataset.add; const last = st.blocks[st.blocks.length - 1]; if (last && last[1] === l) last[0] += n; else st.blocks.push([n, l]); st.weekly = false; draw(); onChange && onChange(cycle(), st); }));
+    $$('[data-rm]', host).forEach((b) => (b.onclick = () => { st.blocks.splice(+b.dataset.rm, 1); draw(); onChange && onChange(cycle(), st); }));
+    const cl = $('#cb_clear', host); if (cl) cl.onclick = () => { st.blocks = []; draw(); onChange && onChange(cycle(), st); };
+  };
+  draw();
+  return { setHrs(h) { st.hrs = h; st.blocks = []; draw(); }, setBlocks(b) { st.blocks = b.map((x) => [...x]); draw(); }, cycle, st };
+}
+
+// =====================================================================
+// PLAN MONTH: a schedule for one month that replaces the pattern
+// =====================================================================
+function planMonthModal(preUid) {
+  const d = wsData();
+  const m0 = (S.type === 'month' ? pStart() : Calc.monthStart(pStart())).slice(0, 7);
+  const emps = d.employees.filter((e) => e.status === 'Active');
+  const pre = preUid && d.planMap[preUid] && d.planMap[preUid][m0];
+  const st = { month: m0, hrs: pre ? pre.shift_hrs : (Calc.planOf && (d.patMap[(d.teamMap[(emps.find((e) => e.uid === preUid) || {}).team_id] || {}).pattern_main] || {}).shift_hrs) || 8, start: pre && pre.cycle_start ? pre.cycle_start : m0 + '-01', over: {}, cycle: pre && pre.cycle ? pre.cycle : [] };
+  const daysOf = () => Calc.periodDays('month', st.month + '-01');
+  const body = `<div class="grid3">
+      <label class="f">Month<input type="month" id="pm_m" value="${st.month}"></label>
+      <div class="f"><span>Shift length</span><div class="seg" id="pm_h"><button type="button" data-h="8">8 hours</button><button type="button" data-h="12">12 hours</button></div></div>
+      <label class="f">Cycle day 1 is<input type="date" id="pm_s" value="${st.start}"></label></div>
+    <div class="grid2 pm-top">
+      <div><div class="hint mb-2xs">Who (tick one or more)</div>
+        <div class="row mb-sm"><input class="flex1" type="text" id="pm_q" placeholder="Search name, number or team"><select id="pm_team" aria-label="Tick a whole team"><option value="">Tick a team</option>${d.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>
+        <div class="checklist" id="pm_list">${emps.map((e) => `<label data-s="${esc((e.name + ' ' + e.emp_no + ' ' + ((d.teamMap[e.team_id] || {}).name || '')).toLowerCase())}"><input type="checkbox" value="${e.uid}" ${e.uid === preUid ? 'checked' : ''}> ${esc(e.name)} <span class="hint">${esc(e.emp_no)}${d.teamMap[e.team_id] ? ', ' + esc(d.teamMap[e.team_id].name) : ''}</span></label>`).join('')}</div></div>
+      <div id="pm_b"></div></div>
+    <div id="pm_prev"></div>`;
+  const ov = modal({ title: 'Plan the month', wide: true, body, buttons: [
+    { label: 'Remove plan', cls: 'danger', action: async (o) => {
+      const ids = $$('#pm_list input:checked', o).map((i) => +i.value);
+      if (!ids.length) { toast('Tick the people whose plan you want to remove', 'err'); return false; }
+      await q(sb.from('month_plans').delete().in('employee_uid', ids).eq('month', st.month + '-01'));
+      await refresh(); toast('Plan removed. Those days follow the pattern again', 'ok');
+    } },
+    { label: 'Cancel' },
+    { label: 'Save plan', cls: 'primary', action: async (o) => {
+      const ids = $$('#pm_list input:checked', o).map((i) => +i.value);
+      if (!ids.length) { toast('Tick at least one person', 'err'); return false; }
+      if (!st.cycle.length) { toast('Build the cycle first: pick a quick start or add days', 'err'); return false; }
+      const codes = monthCodes();
+      await q(sb.from('month_plans').upsert(ids.map((uid) => ({ workshop_id: S.ws, employee_uid: uid, month: st.month + '-01', shift_hrs: st.hrs, codes, cycle: st.cycle, cycle_start: st.start, updated_at: new Date().toISOString() })), { onConflict: 'employee_uid,month' }));
+      await refresh(); toast(`Plan saved for ${ids.length} ${ids.length === 1 ? 'person' : 'people'}`, 'ok');
+    } }] });
+  const monthCodes = () => daysOf().map((day) => {
+    if (st.over[day]) return st.over[day];
+    if (!st.cycle.length) return 'R';
+    const n = st.cycle.length, k = ((Calc.diffDays(st.start, day) % n) + n) % n; return st.cycle[k];
+  });
+  const preview = () => {
+    const days = daysOf(), codes = monthCodes(), m = workCodes(d, st.hrs), order = Object.values(m);
+    const prod = codes.reduce((a, c) => a + Number((d.codeMap[c] || {}).prod_hrs || 0), 0), work = codes.filter((c) => c !== 'R').length;
+    const ids = $$('#pm_list input:checked', ov).map((i) => +i.value);
+    const had = ids.filter((u) => d.planMap[u] && d.planMap[u][st.month]).length;
+    $('#pm_prev', ov).innerHTML = `<div class="pm-sum"><b>${MONTHS_L[+st.month.slice(5) - 1]} ${st.month.slice(0, 4)}</b><span>${work} working days, ${fmt0(prod)} productive hours a person</span><span>${ids.length} ${ids.length === 1 ? 'person' : 'people'} ticked${had ? `, ${had} already planned (will be replaced)` : ''}</span><span class="hint">Click a day to change it</span></div>
+      <div class="tbl-wrap"><table class="roster pm-cal"><thead><tr>${days.map((x) => { const w = Calc.dow(x); return `<th class="${w === 5 || w === 6 ? 'wk' : ''}">${DOWS[w].slice(0, 2)}<br>${+x.slice(8)}</th>`; }).join('')}</tr></thead>
+      <tbody><tr>${codes.map((c, i) => `<td class="cell ${codeClass(d, c)} ${st.over[days[i]] ? 'c-change' : ''}" data-day="${days[i]}" title="${esc(c)}">${esc(letterOf(c))}</td>`).join('')}</tr></tbody></table></div>`;
+    $$('[data-day]', ov).forEach((td) => (td.onclick = () => { const cur = monthCodes()[days.indexOf(td.dataset.day)]; const next = order[(order.indexOf(cur) + 1) % order.length]; st.over[td.dataset.day] = next; preview(); }));
+  };
+  const b = cycleBuilder($('#pm_b', ov), d, { hrs: st.hrs, blocks: toBlocks(st.cycle), onChange: (cyc, bst) => {
+    st.cycle = cyc; st.over = {};
+    if (bst.weekly) { st.start = Calc.weekStart(st.month + '-01'); $('#pm_s', ov).value = st.start; }
+    preview();
+  } });
+  const segSync = () => $$('#pm_h button', ov).forEach((x) => x.classList.toggle('on', +x.dataset.h === st.hrs));
+  $$('#pm_h button', ov).forEach((x) => (x.onclick = () => { st.hrs = +x.dataset.h; st.cycle = []; st.over = {}; b.setHrs(st.hrs); segSync(); preview(); }));
+  $('#pm_m', ov).onchange = (e) => { if (!e.target.value) return; const was = st.month; st.month = e.target.value; st.over = {}; if (st.start.slice(0, 7) === was) st.start = st.month + '-01'; $('#pm_s', ov).value = st.start; preview(); };
+  $('#pm_s', ov).onchange = (e) => { if (e.target.value) { st.start = e.target.value; st.over = {}; preview(); } };
+  $('#pm_q', ov).oninput = (e) => $$('#pm_list label', ov).forEach((l) => l.classList.toggle('hidden', !l.dataset.s.includes(e.target.value.toLowerCase())));
+  $('#pm_team', ov).onchange = (e) => { const t = +e.target.value; if (!t) return; const set = new Set(emps.filter((x) => x.team_id === t).map((x) => String(x.uid))); $$('#pm_list input', ov).forEach((i) => { if (set.has(i.value)) i.checked = true; }); e.target.value = ''; preview(); };
+  $('#pm_list', ov).onchange = () => preview();
+  // continue last month's rotation for the first ticked person
+  const cont = document.createElement('button'); cont.type = 'button'; cont.className = 'btn sm'; cont.textContent = 'Continue last month';
+  cont.onclick = () => {
+    const uid = +($$('#pm_list input:checked', ov)[0] || {}).value; const prev = Calc.shiftPeriod('month', st.month + '-01', -1).slice(0, 7);
+    const p = uid && d.planMap[uid] && d.planMap[uid][prev];
+    if (!p || !p.cycle) { toast('No plan last month for the first ticked person', 'err'); return; }
+    st.hrs = p.shift_hrs; segSync(); b.setHrs(st.hrs); b.setBlocks(toBlocks(p.cycle)); st.cycle = p.cycle; st.start = p.cycle_start; st.over = {}; $('#pm_s', ov).value = st.start; preview();
+    toast('Loaded. The rotation carries on from where last month ended', 'ok');
+  };
+  $('#pm_s', ov).closest('.grid3').appendChild(Object.assign(document.createElement('div'), { className: 'f pm-cont' })).append(cont);
+  segSync(); preview();
 }
 
 // =====================================================================
@@ -845,25 +967,37 @@ function teamRow(d, t, dis, ed) {
 function patternModal(p) {
   const d = wsData(), isNew = !p;
   p = p || { name: '', description: '', shift_hrs: 8, cycle_start: Calc.weekStart(today()), cycle: [] };
-  modal({ title: isNew ? 'Add shift pattern' : 'Edit shift pattern', wide: true, body: `<div class="grid3">
-    <label class="f">Name *<input type="text" id="p_n" value="${esc(p.name)}"></label>
-    <label class="f">Shift length<select id="p_h"><option value="8" ${p.shift_hrs === 8 ? 'selected' : ''}>8 h</option><option value="12" ${p.shift_hrs === 12 ? 'selected' : ''}>12 h</option></select></label>
-    <label class="f">Cycle starts (day 1)<input type="date" id="p_s" value="${p.cycle_start}"></label></div>
+  let cycle = [...p.cycle];
+  const ov = modal({ title: isNew ? 'Add shift pattern' : 'Edit shift pattern', wide: true, body: `<div class="grid3">
+    <label class="f">Name *<input type="text" id="p_n" value="${esc(p.name)}" placeholder="For example Team A, 4 on 4 off"></label>
+    <div class="f"><span>Shift length</span><div class="seg" id="p_h"><button type="button" data-h="8">8 hours</button><button type="button" data-h="12">12 hours</button></div></div>
+    <label class="f">Cycle day 1 is<input type="date" id="p_s" value="${p.cycle_start}"></label></div>
     <label class="f">Description<input type="text" id="p_d" value="${esc(p.description || '')}"></label>
-    <label class="f">Cycle codes in order, comma separated<textarea id="p_c" rows="4">${esc(p.cycle.join(', '))}</textarea></label>
-    <p class="hint m0">Codes you can use: ${d.shift_codes.map((c) => esc(c.code)).join(', ')}</p>`,
+    <div id="p_b"></div><div id="p_prev"></div>
+    <p class="hint m0">A pattern repeats with no end. For a schedule that changes month to month, use Plan the month on the Roster page.</p>`,
     buttons: [...(isNew ? [] : [{ label: 'Delete', cls: 'danger', action: async () => {
       if (!(await confirmBox('Delete pattern', `Delete <b>${esc(p.name)}</b>? Teams and people that use it will have no shifts.`))) return false;
       await q(sb.from('patterns').delete().eq('id', p.id)); await refresh(); toast('Pattern deleted', 'ok');
-    } }]), { label: 'Cancel' }, { label: 'Save pattern', cls: 'primary', action: async (ov) => {
-      const cycle = $('#p_c', ov).value.split(',').map((x) => x.trim()).filter(Boolean);
-      const bad = cycle.filter((c) => !d.codeMap[c]);
-      if (bad.length) { toast('Unknown code: ' + bad.join(', '), 'err'); return false; }
-      const row = { workshop_id: S.ws, name: $('#p_n', ov).value.trim(), shift_hrs: +$('#p_h', ov).value, cycle_start: $('#p_s', ov).value, description: $('#p_d', ov).value, cycle };
-      if (!row.name || !cycle.length || !row.cycle_start) { toast('Name, start date and cycle are required', 'err'); return false; }
+    } }]), { label: 'Cancel' }, { label: 'Save pattern', cls: 'primary', action: async (o) => {
+      const row = { workshop_id: S.ws, name: $('#p_n', o).value.trim(), shift_hrs: hrs, cycle_start: $('#p_s', o).value, description: $('#p_d', o).value, cycle };
+      if (!row.name || !cycle.length || !row.cycle_start) { toast('Name, cycle day 1 and the cycle are required', 'err'); return false; }
       if (isNew) await q(sb.from('patterns').insert(row)); else await q(sb.from('patterns').update(row).eq('id', p.id));
       await refresh(); toast('Pattern saved', 'ok');
     } }] });
+  let hrs = p.shift_hrs;
+  const prev = () => {
+    const start = $('#p_s', ov).value || today(), days = Array.from({ length: 28 }, (_, i) => Calc.addDays(Calc.weekStart(start), i));
+    const code = (day) => { if (!cycle.length) return ''; const n = cycle.length, k = ((Calc.diffDays(start, day) % n) + n) % n; return cycle[k]; };
+    const prod = cycle.reduce((a, c) => a + Number((d.codeMap[c] || {}).prod_hrs || 0), 0);
+    $('#p_prev', ov).innerHTML = cycle.length ? `<div class="pm-sum"><b>First 4 weeks</b><span>${fmt(cycle.length ? (prod / cycle.length) * 7 : 0)} productive hours a week on average</span></div>
+      <div class="tbl-wrap"><table class="roster pm-cal"><thead><tr>${days.map((x) => { const w = Calc.dow(x); return `<th class="${w === 5 || w === 6 ? 'wk' : ''}">${DOWS[w].slice(0, 2)}<br>${+x.slice(8)}</th>`; }).join('')}</tr></thead>
+      <tbody><tr>${days.map((x) => { const c = code(x); return `<td class="cell ${codeClass(d, c)}">${esc(letterOf(c))}</td>`; }).join('')}</tr></tbody></table></div>` : '';
+  };
+  const b = cycleBuilder($('#p_b', ov), d, { hrs, blocks: toBlocks(cycle), onChange: (c, st) => { cycle = c; if (st.weekly) $('#p_s', ov).value = Calc.weekStart($('#p_s', ov).value || today()); prev(); } });
+  const sync = () => $$('#p_h button', ov).forEach((x) => x.classList.toggle('on', +x.dataset.h === hrs));
+  $$('#p_h button', ov).forEach((x) => (x.onclick = () => { if (+x.dataset.h === hrs) return; hrs = +x.dataset.h; cycle = []; b.setHrs(hrs); sync(); prev(); }));
+  $('#p_s', ov).onchange = prev;
+  sync(); prev();
 }
 
 // =====================================================================
@@ -959,6 +1093,7 @@ async function exportAll() {
   const empM = {}; d.employees.forEach((e) => (empM[e.uid] = e));
   const wb = XLSX.utils.book_new();
   sheet(wb, 'Employees', d.employees.map((e) => ({ 'Employee No': e.emp_no, Name: e.name, Role: e.role, Team: (d.teamMap[e.team_id] || {}).code || '', Section: e.section_id ? secName(d, e.section_id) : '', 'Counted % (blank = auto)': e.hours_pct === null || e.hours_pct === undefined ? '' : Math.round(e.hours_pct * 100), Specialty: e.specialty || '', Skills: e.skills || '', 'Start Date': e.start_date || '', 'End Date': e.end_date || '', Status: e.status, 'Own Pattern': patName(d, e.pattern_main), 'Own Alternative Pattern': patName(d, e.pattern_alt), Notes: e.notes || '' })), COLS.Employees);
+  if (d.month_plans.length) sheet(wb, 'Month Plans', d.month_plans.map((m) => ({ 'Employee No': (empM[m.employee_uid] || {}).emp_no, 'Employee Name': (empM[m.employee_uid] || {}).name, Month: String(m.month).slice(0, 7), 'Shift Hours': m.shift_hrs, ...Object.fromEntries(m.codes.map((c, i) => [String(i + 1), letterOf(c)])) })), ['Employee No', 'Employee Name', 'Month', 'Shift Hours', ...Array.from({ length: 31 }, (_, i) => String(i + 1))]);
   sheet(wb, 'Leave and Status', d.status_changes.map((c) => ({ 'Employee No': (empM[c.employee_uid] || {}).emp_no, 'Employee Name': (empM[c.employee_uid] || {}).name, Status: c.status_type, 'Shift Code (Custom only)': c.code || '', From: c.date_from, To: c.date_to, Notes: c.notes || '' })), COLS['Leave and Status']);
   sheet(wb, 'Exam Types', d.exam_types.map((x) => ({ Section: secName(d, x.section_id), Type: x.category, Asset: x.asset, Exam: x.exam, 'Std Man-hours': Number(x.hours), Crew: x.crew ?? '', 'Default per Week': x.default_weekly ?? '', Active: x.active ? 'Yes' : 'No', Order: x.sort })), COLS['Exam Types']);
   sheet(wb, 'Workload', [...d.counts].sort((a, b) => a.period_start.localeCompare(b.period_start)).map((c) => { const x = exM[c.exam_type_id] || {}; return { 'Period (Week/Month)': c.period_type === 'week' ? 'Week' : 'Month', 'Period Start': c.period_start, Section: secName(d, x.section_id), Asset: x.asset, Exam: x.exam, Planned: c.count ?? '', Actual: c.actual ?? '' }; }), COLS.Workload);
@@ -1035,14 +1170,14 @@ async function runImport(data, opt) {
     log.push(`Sections: ${n} saved`); await reload();
   }
   if (data['Shift Codes']) {
-    const rows = data['Shift Codes'].filter((r) => str(r.Code)).map((r, i) => ({ workshop_id: W, code: str(r.Code), description: str(r.Description) || str(r.Code), shift_type: ['8', '12'].includes(str(r['Shift (8/12/-)'])) ? str(r['Shift (8/12/-)']) : '-', status_type: str(r['Used For']) || null,
+    const seenC = new Set(); const rows = data['Shift Codes'].filter((r) => str(r.Code) && !seenC.has(newCode(W, str(r.Code))) && seenC.add(newCode(W, str(r.Code)))).map((r, i) => ({ workshop_id: W, code: newCode(W, str(r.Code)), description: str(r.Description) || str(r.Code), shift_type: ['8', '12'].includes(str(r['Shift (8/12/-)'])) ? str(r['Shift (8/12/-)']) : '-', status_type: str(r['Used For']) || null,
       paid_hrs: Number(r['Paid Hrs']) || 0, prod_hrs: Number(r['Productive Hrs']) || 0, ot_hrs: Number(r['OT Hrs']) || 0, staff_day: Number(r['Staff Day (1/0)']) ? 1 : 0, sort: i }));
     if (rows.length) await q(sb.from('shift_codes').upsert(rows)); log.push(`Shift codes: ${rows.length} saved`);
   }
   if (data.Patterns) {
     let n = 0;
     for (const r of data.Patterns.filter((r) => str(r.Pattern))) {
-      const row = { workshop_id: W, name: str(r.Pattern), description: str(r.Description), shift_hrs: Number(r['Shift Hours']) === 12 ? 12 : 8, cycle_start: cellDate(r['Cycle Start']), cycle: str(r['Cycle (comma separated)']).split(',').map((x) => x.trim()).filter(Boolean) };
+      const row = { workshop_id: W, name: str(r.Pattern), description: str(r.Description), shift_hrs: Number(r['Shift Hours']) === 12 ? 12 : 8, cycle_start: cellDate(r['Cycle Start']), cycle: str(r['Cycle (comma separated)']).split(',').map((x) => newCode(W, x.trim())).filter(Boolean) };
       if (!row.cycle_start || !row.cycle.length) continue;
       const ex = d.patterns.find((p) => p.name === row.name);
       if (ex) await q(sb.from('patterns').update(row).eq('id', ex.id)); else await q(sb.from('patterns').insert(row)); n++;
@@ -1114,7 +1249,7 @@ async function runImport(data, opt) {
     data['Leave and Status'].forEach((r) => {
       const t = STATUS_TYPES.find((x) => x.toLowerCase() === str(r.Status).toLowerCase());
       const emp = d.employees.find((e) => e.emp_no === str(r['Employee No']));
-      const row = { workshop_id: W, employee_uid: emp && emp.uid, status_type: t, code: t === 'Custom' ? str(r['Shift Code (Custom only)']) : null, date_from: cellDate(r.From), date_to: cellDate(r.To), notes: str(r.Notes) || null, created_by: S.me.username };
+      const row = { workshop_id: W, employee_uid: emp && emp.uid, status_type: t, code: t === 'Custom' ? newCode(W, str(r['Shift Code (Custom only)'])) : null, date_from: cellDate(r.From), date_to: cellDate(r.To), notes: str(r.Notes) || null, created_by: S.me.username };
       if (!t || !emp || !row.date_from || !row.date_to || row.date_to < row.date_from || (t === 'Custom' && !row.code)) { bad++; return; }
       if (have.has(key(row))) { skip++; return; }
       have.add(key(row)); rows.push(row);
