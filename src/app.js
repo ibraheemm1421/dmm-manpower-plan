@@ -112,8 +112,9 @@ function modal({ title, body, buttons = [], wide = false, onOpen }) {
     el.className = 'btn ' + (b.cls || ''); el.textContent = b.label;
     el.onclick = async () => {
       if (!b.action) return close();
-      el.disabled = true;
-      try { const r = await b.action(ov); if (r !== false) close(); } catch (e) { fail(e); } finally { el.disabled = false; }
+      clearErrors(ov);
+      const old = el.textContent; el.disabled = true; el.setAttribute('aria-busy', 'true'); if (b.cls && b.cls.includes('primary')) el.textContent = 'Saving…';
+      try { const r = await b.action(ov); if (r !== false) close(); } catch (e) { fail(e); } finally { el.disabled = false; el.removeAttribute('aria-busy'); el.textContent = old; }
     };
     foot.appendChild(el);
   });
@@ -123,6 +124,19 @@ function modal({ title, body, buttons = [], wide = false, onOpen }) {
   if (onOpen) onOpen(ov);
   const first = $('.body input:not([type=checkbox]),.body select,.body textarea', ov); if (first) first.focus();
   return ov;
+}
+// inline field errors: message under the field, linked for screen readers, focus moves to the field
+function fieldError(o, sel, msg) {
+  const el = $(sel, o); if (!el) { toast(msg, 'err'); return false; }
+  const id = (el.id || 'fld') + '_err'; el.setAttribute('aria-invalid', 'true'); el.setAttribute('aria-describedby', id);
+  let e = $('#' + id, o); if (!e) { e = document.createElement('div'); e.className = 'ferr'; e.id = id; e.setAttribute('role', 'alert'); const box = el.closest('label.f, div.f'); if (box) box.appendChild(e); else el.insertAdjacentElement('afterend', e); }
+  e.textContent = msg; if (el.focus) el.focus(); return false;
+}
+function clearErrors(o) { $$('[aria-invalid]', o).forEach((x) => { x.removeAttribute('aria-invalid'); x.removeAttribute('aria-describedby'); }); $$('.ferr', o).forEach((x) => x.remove()); }
+// busy state for any async button: disabled, labelled, no double clicks
+async function busy(btn, fn, label = 'Saving…') {
+  if (!btn || btn.disabled) return; const old = btn.textContent; btn.disabled = true; btn.setAttribute('aria-busy', 'true'); btn.textContent = label;
+  try { return await fn(); } finally { btn.disabled = false; btn.removeAttribute('aria-busy'); btn.textContent = old; }
 }
 function confirmBox(title, text, okLabel = 'Delete') {
   return new Promise((res) => {
@@ -238,12 +252,14 @@ function fitPrint() {
 function unfitPrint() { document.body.classList.remove('printing'); const page = $('#view'); if (page) { page.classList.remove('fit', 'fitw'); page.style.removeProperty('--print-w'); page.style.removeProperty('--print-zoom'); } }
 window.addEventListener('beforeprint', fitPrint);
 window.addEventListener('afterprint', unfitPrint);
+const BUSY_BTNS = '#wl_save,#ts_save,#ts_apply,#s_save,#sec_save,#et_save,#sc_save,#tm_save,#imp_go';
+function wrapBusy(el) { $$(BUSY_BTNS, el).forEach((b) => { const h = b.onclick; if (!h || b._busy) return; b._busy = true; b.onclick = (e) => busy(b, () => h.call(b, e), b.id === 'imp_go' ? 'Importing…' : 'Saving…'); }); }
 function render() {
   if (!S.me || !S.all) return;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.nav === S.view));
   const el = $('#view');
   if (!S.all.workshops.length) { el.innerHTML = '<div class="note warn">No workshop is linked to this account yet. Ask the administrator.</div>'; return; }
-  try { VIEWS[S.view](el); bindFilters(el); } catch (e) { fail(e); el.innerHTML = `<div class="note warn">Something went wrong: ${esc(e.message)}</div>`; }
+  try { VIEWS[S.view](el); bindFilters(el); wrapBusy(el); } catch (e) { fail(e); el.innerHTML = `<div class="note warn">Something went wrong: ${esc(e.message)}</div>`; }
 }
 function filtersHTML({ ws = WS_VIEWS.includes(S.view), period = PERIOD_VIEWS.includes(S.view), alt = true } = {}) {
   const d = ws ? wsData() : null;
@@ -300,6 +316,11 @@ function svgDiverge(v, maxAbs, w = 96) {
   return `<svg width="${w}" height="14" viewBox="0 0 ${w} 14" aria-hidden="true"><rect class="bar-track" x="0" y="3" width="${w}" height="8" rx="2"/><rect class="${v < 0 ? 'bar-bad' : 'bar-good'}" x="${v < 0 ? half - len : half}" y="3" width="${len}" height="8" rx="1"/><line class="axis-zero" x1="${half}" x2="${half}" y1="0" y2="14"/></svg>`;
 }
 // grouped columns: planned (light) and done (accent) per period
+// the same numbers as a table, for keyboard and screen-reader users and for reading exact values
+function trendTable(labels, planned, done) {
+  return `<details class="chart-data"><summary>Show the numbers</summary><div class="tbl-wrap"><table><thead><tr><th>Period</th>${labels.map((l) => `<th class="num">${esc(l)}</th>`).join('')}</tr></thead>
+    <tbody><tr><td>Planned</td>${planned.map((v) => `<td class="num">${fmt0(v || 0)}</td>`).join('')}</tr><tr><td>Done</td>${done.map((v) => `<td class="num">${v == null ? '–' : fmt0(v)}</td>`).join('')}</tr></tbody></table></div></details>`;
+}
 function trendSVG(labels, planned, done, { w = 640, h = 220, title = '' } = {}) {
   const L = 40, R = 8, T = 18, B = 26, iw = w - L - R, ih = h - T - B;
   const max = niceMax(Math.max(1, ...planned, ...done.filter((v) => v != null)));
@@ -379,14 +400,14 @@ function viewDashboard(el) {
   if (all) {
     chart = `<section class="panel"><div class="phead"><div class="ttl"><h2>Planned and done exams, last ${nPer} ${unit}</h2><p>One chart per workshop, same scale inside each chart</p></div></div>
       <div class="legend"><span><i class="sw-planned"></i>Planned</span><span><i class="sw-actual"></i>Done</span></div>
-      <div class="multiples">${scope.map((w) => { const s = series(trendOf(w)); return `<figure class="chart"><figcaption>${esc(w.short_name)}</figcaption>${trendSVG(periods.map((st) => plabel(S.type, st)), s.p, s.a, { w: 340, h: 190, title: `Planned and done exams, ${w.name}` })}</figure>`; }).join('')}</div></section>`;
+      <div class="multiples">${scope.map((w) => { const s = series(trendOf(w)); return `<figure class="chart"><figcaption>${esc(w.short_name)}</figcaption>${trendSVG(periods.map((st) => plabel(S.type, st)), s.p, s.a, { w: 340, h: 190, title: `Planned and done exams, ${w.name}` })}${trendTable(periods.map((st) => plabel(S.type, st)), s.p, s.a)}</figure>`; }).join('')}</div></section>`;
     ledger = `<section class="panel"><div class="phead"><div class="ttl"><h2>Workshop ledger, ${periodLabel()}</h2><p>Open a workshop to see its sections and what it takes to close the work</p></div></div>${LEGEND}
       ${ledgerTable('Workshop', results.map(({ w, r }) => ({ name: `<button class="linkbtn" data-dash="${w.id}">${esc(w.name)}</button>`, t: r.tot })), results.length > 1 ? T : null)}</section>`;
   } else {
     const w = scope[0], d = wsData(w.id), R = results[0].r, tots = trendOf(w), s = series(tots);
     chart = `<section class="panel print-skip"><div class="phead"><div class="ttl"><h2>Planned and done exams, last ${nPer} ${unit}</h2><p>Hover a period for its figures</p></div></div>
       <div class="legend"><span><i class="sw-planned"></i>Planned</span><span><i class="sw-actual"></i>Done</span></div>
-      <figure class="chart m0">${trendSVG(periods.map((st) => plabel(S.type, st)), s.p, s.a, { w: 1240, h: 260, title: `Planned and done exams, ${w.name}` })}</figure></section>`;
+      <figure class="chart m0">${trendSVG(periods.map((st) => plabel(S.type, st)), s.p, s.a, { w: 1240, h: 260, title: `Planned and done exams, ${w.name}` })}${trendTable(periods.map((st) => plabel(S.type, st)), s.p, s.a)}</figure></section>`;
     ledger = `<section class="panel"><div class="phead"><div class="ttl"><h2>Ledger by ${S.type}</h2><p>The selected ${S.type} is the last row</p></div></div>${LEGEND}
       ${ledgerTable(S.type === 'week' ? 'Week' : 'Month', periods.map((st, i) => ({ name: esc(plabel(S.type, st)), t: tots[i], cls: i === nPer - 1 ? 'cur' : '' })), null)}</section>`;
     extra = `<section class="panel"><div class="phead"><div class="ttl"><h2>What it takes to close ${periodLabel()}</h2><p>People or overtime needed per section to finish the planned exams</p></div>${canEdit() ? '<a class="btn sm" href="#workload">Enter planned and done exams</a>' : ''}</div>${closeTable(R, d)}</section>`;
@@ -499,6 +520,17 @@ function viewRoster(el) {
       <td>${pct(r.pct)}</td>
       ${r.cells.map((c) => `<td class="cell ${codeClass(d, c.code)} ${c.source === 'change' ? 'c-change' : ''}" data-e="${r.emp.uid}" data-d="${c.day}" title="${esc(dlabel(c.day) + ': ' + (c.code || 'not on roster'))}">${esc(shortCode(c.code))}</td>`).join('')}
       <td class="num">${fmt0(r.staffDays)}</td><td class="num">${fmt(r.prod)}</td><td class="num">${fmt(r.ot)}</td></tr>`).join('')).join('');
+  // phone: one day at a time, a list instead of the 31-column table
+  if (!S.rday || !R.days.includes(S.rday)) S.rday = R.days.includes(today()) ? today() : R.days[0];
+  const wordOf = (code) => { const c = d.codeMap[code]; if (!code) return 'Not on roster'; if (code === 'R') return 'Rest day'; if (c && c.status_type) return c.status_type; return (SHIFT_WORDS[letterOf(code)] || code) + (c && c.shift_type === '12' ? ', 12 h' : ''); };
+  const dayCells = show.flatMap((s) => s.rows.map((r) => r.cells.find((c) => c.day === S.rday) || {}));
+  const cnt = { M: 0, A: 0, N: 0, off: 0, away: 0 };
+  dayCells.forEach((c) => { const sc = d.codeMap[c.code]; if (!c.code || c.code === 'R') cnt.off++; else if (sc && sc.status_type && sc.status_type !== 'Overtime') cnt.away++; else if (cnt[letterOf(c.code)] !== undefined) cnt[letterOf(c.code)]++; });
+  const dayView = `<section class="roster-day" aria-label="Roster for one day">
+    <div class="rd-strip" role="tablist" aria-label="Day">${R.days.map((x) => `<button type="button" role="tab" data-rday="${x}" aria-selected="${x === S.rday}" class="${x === S.rday ? 'on' : ''} ${Calc.dow(x) >= 5 ? 'wk' : ''}"><span>${DOWS[Calc.dow(x)].slice(0, 3)}</span><b>${+x.slice(8)}</b></button>`).join('')}</div>
+    <div class="rd-sum"><b>${esc(dlabel(S.rday))}</b><span class="pill info">${cnt.M} Morning</span>${cnt.A ? `<span class="pill info">${cnt.A} Afternoon</span>` : ''}<span class="pill info">${cnt.N} Night</span><span class="pill muted">${cnt.off} off</span><span class="pill warn">${cnt.away} on leave or away</span></div>
+    ${show.map((s) => `<h3 class="rd-sec">${esc(s.section.name)}</h3><ul class="rd-list">${s.rows.map((r) => { const c = r.cells.find((x) => x.day === S.rday) || {}; const tag = ed ? 'button type="button"' : 'div'; return `<li><${tag} class="rd-row" data-e="${r.emp.uid}" data-d="${S.rday}"><span class="rd-name">${esc(r.emp.name)}<span class="sub-line">${esc(r.emp.emp_no)}, ${esc(r.emp.role || '')}</span></span><span class="rd-code ${codeClass(d, c.code)}">${esc(shortCode(c.code) || '–')}</span><span class="rd-word">${esc(wordOf(c.code))}</span></${ed ? 'button' : 'div'}></li>`; }).join('')}</ul>`).join('') || '<p class="empty">No one to show.</p>'}
+  </section>`;
   const inPeriod = d.status_changes.filter((c) => c.date_to >= R.days[0] && c.date_from <= R.days[R.days.length - 1]).sort((a, b) => a.date_from.localeCompare(b.date_from));
   const empMap = {}; d.employees.forEach((e) => (empMap[e.uid] = e));
   const wsN = (S.all.workshops.find((w) => w.id === S.ws) || {}).name || '';
@@ -506,16 +538,19 @@ function viewRoster(el) {
   const rHead = `<div class="print-head" data-fit="width">${SAR_LOGO}<div><h1>${esc(wsN)}, roster ${esc(periodLabel())}</h1><p>${S.section ? esc((secs.find((x) => String(x.id) === S.section) || { section: {} }).section.name) + '. ' : ''}M Morning, A Afternoon, N Night, 12 = 12-hour shift. Generated ${pnow.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}.</p></div></div>`;
   el.innerHTML = rHead + head('Roster and leave', 'Shifts come from each team or person pattern, or from a month plan. Leave, sickness, training, overtime and absence are recorded from one date to another.', ed ? '<button class="btn" id="rpBtn">Export PDF</button><button class="btn" id="rxBtn">Export month to Excel</button><button class="btn" id="planMonth">Plan the month</button><button class="btn primary" id="addStatus">Add leave or status</button>' : '<button class="btn" id="rpBtn">Export PDF</button><button class="btn" id="rxBtn">Export month to Excel</button>') + `
   <div class="toolbar"><select id="secSel" aria-label="Section"><option value="">All sections</option>${secs.map((s) => `<option value="${s.id}" ${String(s.id) === S.section ? 'selected' : ''}>${esc(s.section.name)}</option>`).join('')}</select>
-    <span class="hint">${ed ? 'Click a day to record leave or a status. Click a name to plan that person\'s month.' : 'View only.'}</span></div>
-  <div class="legend"><span><i class="c-work"></i>Working</span><span><i class="c-rest"></i>Rest day</span><span><i class="c-leave"></i>Annual or planned leave</span><span><i class="c-train"></i>Training</span><span><i class="c-sick"></i>Sick</span><span><i class="c-ot"></i>Overtime</span><span><i class="c-abs"></i>Absent</span><span><i class="c-work c-change"></i>Changed from pattern</span><span class="hint">M Morning, A Afternoon, N Night, 12 = 12-hour shift</span></div>
+    <span class="hint desk-only">${ed ? 'Click a day to record leave or a status. Click a name to plan that person\'s month.' : 'View only.'}</span><span class="hint phone-only">${ed ? 'Pick a day, then tap a person to record leave or a status.' : 'View only.'}</span></div>
+  <div class="legend roster-key"><span><i class="c-work"></i>Working</span><span><i class="c-rest"></i>Rest day</span><span><i class="c-leave"></i>Annual or planned leave</span><span><i class="c-train"></i>Training</span><span><i class="c-sick"></i>Sick</span><span><i class="c-ot"></i>Overtime</span><span><i class="c-abs"></i>Absent</span><span><i class="c-work c-change"></i>Changed from pattern</span><span class="hint">M Morning, A Afternoon, N Night, 12 = 12-hour shift</span></div>
   <div class="tbl-wrap roster-wrap"><table class="roster ${ed ? 'edit' : ''}"><thead><tr><th class="left">Employee</th><th>Count</th>${head1}<th>Days</th><th>Prod h</th><th>OT h</th></tr></thead>
-  <tbody>${body}</tbody></table></div>
+  <tbody>${body || `<tr><td colspan="${R.days.length + 5}" class="empty">No one to show. ${d.employees.length ? 'Pick another section.' : 'Add employees on the Employees page first.'}</td></tr>`}</tbody></table></div>
+  ${dayView}
   <div class="panel mt-lg"><div class="phead"><h2>Leave and status in this period</h2><span class="hint">${inPeriod.length} records</span></div>
   ${inPeriod.length ? `<div class="tbl-wrap"><table><thead><tr><th>Employee</th><th>Status</th><th>From</th><th>To</th><th class="num">Days</th><th>Notes</th><th></th></tr></thead><tbody>
   ${inPeriod.map((c) => { const e = empMap[c.employee_uid] || {}; return `<tr><td>${esc(e.name)}<span class="sub-line">${esc(e.emp_no)}</span></td><td><span class="pill info">${esc(c.status_type === 'Custom' ? 'Shift ' + c.code : c.status_type)}</span></td><td>${dlabel(c.date_from)}</td><td>${dlabel(c.date_to)}</td><td class="num">${Calc.diffDays(c.date_from, c.date_to) + 1}</td><td>${esc(c.notes || '')}</td>
-    <td class="actions">${ed ? `<button class="btn sm" data-edit="${c.id}">Edit</button> <button class="btn sm danger" data-del="${c.id}">Delete</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>` : '<p class="hint">Nothing recorded for this period.</p>'}</div>`;
+    <td class="actions">${ed ? `<button class="btn sm" data-edit="${c.id}">Edit</button> <button class="btn sm danger" data-del="${c.id}">Delete</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>` : '<p class="empty">Nothing recorded for this period.</p>'}</div>`;
   $('#secSel', el).onchange = (e) => { S.section = e.target.value; viewRoster(el); };
   $('#rxBtn', el).onclick = exportRosterXlsx;
+  $$('[data-rday]', el).forEach((b) => (b.onclick = () => { S.rday = b.dataset.rday; viewRoster(el); const on = $('.rd-strip .on', el); if (on) on.scrollIntoView({ inline: 'center', block: 'nearest' }); }));
+  { const on = $('.rd-strip .on', el); if (on && on.parentElement.scrollWidth > on.parentElement.clientWidth) on.parentElement.scrollLeft = on.offsetLeft - on.parentElement.clientWidth / 2; }
   $('#rpBtn', el).onclick = () => {
     const t = document.title; document.title = `Roster ${wsN} ${periodLabel()}`;
     const back = () => { document.title = t; window.removeEventListener('afterprint', back); };
@@ -525,7 +560,7 @@ function viewRoster(el) {
   $('#addStatus', el).onclick = () => statusModal({});
   $('#planMonth', el).onclick = () => planMonthModal();
   $$('[data-plan]', el).forEach((b) => (b.onclick = () => planMonthModal(+b.dataset.plan)));
-  $$('td.cell', el).forEach((td) => (td.onclick = () => {
+  $$('td.cell, .rd-row', el).forEach((td) => (td.onclick = () => {
     const uid = +td.dataset.e, day = td.dataset.d;
     const covering = d.status_changes.filter((c) => c.employee_uid === uid && c.date_from <= day && c.date_to >= day);
     statusModal({ employee_uid: uid, date_from: day, date_to: day }, covering);
@@ -554,13 +589,13 @@ function statusModal(ch, covering = []) {
     <p class="hint m0">Leave, sick, training and absence replace working days only. Overtime and a different shift apply on every day in the range, so use them for rest-day overtime.</p>`;
   modal({ title: editing ? 'Edit leave or status' : 'Add leave or status', body, buttons: [{ label: 'Cancel' }, { label: 'Save', cls: 'primary', action: async (ov) => {
     const type = $('#st_type', ov).value, from = $('#st_from', ov).value, to = $('#st_to', ov).value;
-    if (!from || !to) { toast('Choose the From and To dates', 'err'); return false; }
+    if (!from) return fieldError(ov, '#st_from', 'Choose the first day'); if (!to) return fieldError(ov, '#st_to', 'Choose the last day');
     if (to < from) { toast('To must be on or after From', 'err'); return false; }
     const base = { workshop_id: S.ws, status_type: type, code: type === 'Custom' ? $('#st_code', ov).value : null, date_from: from, date_to: to, notes: $('#st_notes', ov).value || null, created_by: S.me.username };
     if (editing) await q(sb.from('status_changes').update({ ...base, employee_uid: +$('#st_emp', ov).value }).eq('id', ch.id));
     else {
       const ids = $$('#st_list input:checked', ov).map((i) => +i.value);
-      if (!ids.length) { toast('Tick at least one employee', 'err'); return false; }
+      if (!ids.length) return fieldError(ov, '#st_list', 'Tick at least one employee');
       await q(sb.from('status_changes').insert(ids.map((id) => ({ ...base, employee_uid: id }))));
     }
     await refresh(); toast('Saved', 'ok');
@@ -568,7 +603,7 @@ function statusModal(ch, covering = []) {
     const sync = () => $('#st_code_w', ov).classList.toggle('hidden', $('#st_type', ov).value !== 'Custom');
     $('#st_type', ov).onchange = sync; sync();
     const sq = $('#st_q', ov); if (sq) sq.oninput = () => $$('#st_list label', ov).forEach((l) => l.classList.toggle('hidden', !l.dataset.s.includes(sq.value.toLowerCase())));
-    $$('[data-rm]', ov).forEach((b) => (b.onclick = async () => { try { await q(sb.from('status_changes').delete().eq('id', +b.dataset.rm)); await refresh(); toast('Removed', 'ok'); ov.remove(); } catch (e) { fail(e); } }));
+    $$('[data-rm]', ov).forEach((b) => (b.onclick = async () => { if (!(await confirmBox('Remove record', 'Remove this leave or status? The roster goes back to the normal shift for those days.', 'Remove'))) return; try { await q(sb.from('status_changes').delete().eq('id', +b.dataset.rm)); await refresh(); toast('Removed', 'ok'); ov.remove(); } catch (e) { fail(e); } }));
   } });
 }
 
@@ -722,7 +757,8 @@ function planMonthModal(preUid) {
   const ov = modal({ title: 'Plan the month', wide: true, body, buttons: [
     { label: 'Remove plan', cls: 'danger', action: async (o) => {
       const ids = $$('#pm_list input:checked', o).map((i) => +i.value);
-      if (!ids.length) { toast('Tick the people whose plan you want to remove', 'err'); return false; }
+      if (!ids.length) return fieldError(o, '#pm_list', 'Tick the people whose plan you want to remove');
+      if (!(await confirmBox('Remove plan', `Remove the plan for ${ids.length} ${ids.length === 1 ? 'person' : 'people'}? Those days follow their normal pattern again.`, 'Remove plan'))) return false;
       const nM = +$('#pm_n', o).value || 1, months = Array.from({ length: nM }, (_, k) => Calc.shiftPeriod('month', st.month + '-01', k));
       await q(sb.from('month_plans').delete().in('employee_uid', ids).in('month', months));
       await refresh(); toast(`Plan removed for ${nM === 1 ? 'this month' : nM + ' months'}. Those days follow the pattern again`, 'ok');
@@ -730,8 +766,8 @@ function planMonthModal(preUid) {
     { label: 'Cancel' },
     { label: 'Save plan', cls: 'primary', action: async (o) => {
       const ids = $$('#pm_list input:checked', o).map((i) => +i.value);
-      if (!ids.length) { toast('Tick at least one person', 'err'); return false; }
-      if (!st.cycle.length) { toast('Build the cycle first: pick a quick start or add days', 'err'); return false; }
+      if (!ids.length) return fieldError(o, '#pm_list', 'Tick at least one person');
+      if (!st.cycle.length) return fieldError(o, '#pm_b', 'Build the cycle first: pick a quick start or add days');
       const nM = +$('#pm_n', o).value || 1, rows = [];
       for (let k = 0; k < nM; k++) {
         const mo = Calc.shiftPeriod('month', st.month + '-01', k), codes = monthCodes(mo.slice(0, 7));
@@ -798,8 +834,9 @@ function viewEmployees(el) {
     <td>${t ? esc(t.name) : ''}<span class="sub-line">${esc(secName(d, Calc.sectionOf(e, d)))}</span></td>
     <td class="num">${pct(Calc.countedPct(e, d.settings))}</td><td>${esc(patName(d, p))}${e.pattern_main ? ' <span class="pill muted">own</span>' : ''}</td>
     <td><span class="pill ${e.status === 'Active' ? 'good' : 'muted'}">${esc(e.status)}</span></td><td>${c ? `<span class="pill info">${esc(c.status_type === 'Custom' ? c.code : c.status_type)}</span>` : ''}</td>
-    <td class="actions">${ed ? `<button class="btn sm" data-st="${e.uid}">Leave</button> <button class="btn sm" data-ed="${e.uid}">Edit</button> <button class="btn sm danger" data-rm="${e.uid}">Delete</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan="9" class="hint">No employees match the filters.</td></tr>'}
+    <td class="actions">${ed ? `<button class="btn sm" data-st="${e.uid}">Leave</button> <button class="btn sm" data-ed="${e.uid}">Edit</button> <button class="btn sm danger" data-rm="${e.uid}">Delete</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan="9" class="hint">No employees match the filters.</td></tr>'}${list.length ? '' : `<tr><td colspan="9" class="empty">No employees match these filters. <button class="linkbtn" id="ef_clear">Clear the filters</button>${ed ? ' or add an employee.' : ''}</td></tr>`}
   </tbody></table></div>`;
+  const efc = $('#ef_clear', el); if (efc) efc.onclick = () => { S.empFilter = { q: '', section: '', status: '' }; viewEmployees(el); };
   const upd = () => { S.empFilter = { q: $('#ef_q', el).value, section: $('#ef_sec', el).value, status: $('#ef_status', el).value }; viewEmployees(el); const i = $('#ef_q', el); i.focus(); i.setSelectionRange(i.value.length, i.value.length); };
   $('#ef_q', el).oninput = upd; $('#ef_sec', el).onchange = upd; $('#ef_status', el).onchange = upd;
   if (!ed) return;
@@ -841,7 +878,7 @@ function employeeModal(e) {
         status: v('#e_status'), hours_pct: v('#e_pct') === '' ? null : Number(v('#e_pct')) / 100, specialty: v('#e_spec') || null, skills: v('#e_skills') || null,
         start_date: v('#e_start') || null, end_date: v('#e_end') || null, pattern_main: v('#e_pm') ? +v('#e_pm') : null, notes: v('#e_notes') || null };
       if (d.hasAlt) row.pattern_alt = v('#e_pa') ? +v('#e_pa') : null;
-      if (!row.emp_no || !row.name) { toast('Employee number and name are required', 'err'); return false; }
+      if (!row.emp_no) return fieldError(ov, '#e_no', 'Enter the employee number'); if (!row.name) return fieldError(ov, '#e_name', 'Enter the name');
       if (row.hours_pct !== null && (row.hours_pct < 0 || row.hours_pct > 1)) { toast('Counted % must be between 0 and 100', 'err'); return false; }
       if (d.employees.some((x) => x.emp_no === row.emp_no && x.uid !== e.uid)) { toast('This employee number already exists in the workshop', 'err'); return false; }
       if (isNew) await q(sb.from('employees').insert(row)); else await q(sb.from('employees').update(row).eq('uid', e.uid));
@@ -991,7 +1028,7 @@ function viewSettings(el) {
       <label class="f">Asset (wagon type, locomotive…) *<input type="text" id="n_a"></label><label class="f">Exam *<input type="text" id="n_e"></label>
       <label class="f">Standard man-hours<input type="number" id="n_h" step="0.05" value="0"></label><label class="f">Crew<input type="number" id="n_c"></label></div>`,
     buttons: [{ label: 'Cancel' }, { label: 'Add exam type', cls: 'primary', action: async (ov) => {
-      const a = $('#n_a', ov).value.trim(), x = $('#n_e', ov).value.trim(); if (!a || !x) { toast('Asset and exam are required', 'err'); return false; }
+      const a = $('#n_a', ov).value.trim(), x = $('#n_e', ov).value.trim(); if (!a) return fieldError(ov, '#n_a', 'Enter the asset'); if (!x) return fieldError(ov, '#n_e', 'Enter the exam');
       await q(sb.from('exam_types').insert({ workshop_id: S.ws, section_id: +$('#n_sec', ov).value, category: $('#n_cat', ov).value, asset: a, exam: x, hours: +$('#n_h', ov).value || 0, crew: $('#n_c', ov).value ? +$('#n_c', ov).value : null, sort: Math.max(0, ...d.exam_types.map((e2) => e2.sort)) + 1 }));
       await refresh(); toast('Exam type added', 'ok');
     } }] });
@@ -1021,7 +1058,7 @@ function viewSettings(el) {
       <label class="f">Paid h<input type="number" id="n_paid" value="8"></label><label class="f">Productive h<input type="number" id="n_prod" value="0"></label>
       <label class="f">OT h<input type="number" id="n_ot" value="0"></label><label class="f">Staff day<select id="n_day"><option value="1">Yes</option><option value="0">No</option></select></label></div>`,
     buttons: [{ label: 'Cancel' }, { label: 'Add shift code', cls: 'primary', action: async (ov) => {
-      const code = $('#n_code', ov).value.trim(); if (!code) { toast('Code is required', 'err'); return false; }
+      const code = $('#n_code', ov).value.trim(); if (!code) return fieldError(ov, '#n_code', 'Enter a code');
       await q(sb.from('shift_codes').insert({ workshop_id: S.ws, code, description: $('#n_desc', ov).value || code, shift_type: $('#n_type', ov).value, status_type: $('#n_st', ov).value || null,
         paid_hrs: +$('#n_paid', ov).value || 0, prod_hrs: +$('#n_prod', ov).value || 0, ot_hrs: +$('#n_ot', ov).value || 0, staff_day: +$('#n_day', ov).value, sort: d.shift_codes.length + 1 }));
       await refresh(); toast('Shift code added', 'ok');
@@ -1086,7 +1123,7 @@ function patternModal(p) {
       await q(sb.from('patterns').delete().eq('id', p.id)); await refresh(); toast('Pattern deleted', 'ok');
     } }]), { label: 'Cancel' }, { label: 'Save pattern', cls: 'primary', action: async (o) => {
       const row = { workshop_id: S.ws, name: $('#p_n', o).value.trim(), shift_hrs: hrs, cycle_start: $('#p_s', o).value, description: $('#p_d', o).value, cycle };
-      if (!row.name || !cycle.length || !row.cycle_start) { toast('Name, cycle day 1 and the cycle are required', 'err'); return false; }
+      if (!row.name) return fieldError(o, '#p_n', 'Give the pattern a name'); if (!row.cycle_start) return fieldError(o, '#p_s', 'Choose cycle day 1'); if (!cycle.length) return fieldError(o, '#p_b', 'Build the cycle: pick a quick start or add days');
       if (isNew) await q(sb.from('patterns').insert(row)); else await q(sb.from('patterns').update(row).eq('id', p.id));
       await refresh(); toast('Pattern saved', 'ok');
     } }] });
@@ -1155,7 +1192,7 @@ async function viewLog(el) {
     if (S.view !== 'log') return;
     const wsn = (id) => id ? ((S.all.workshops.find((w) => w.id === id) || {}).short_name || id) : '';
     el.innerHTML = head('Activity', 'Who changed what, newest first.') + `<div class="tbl-wrap"><table><thead><tr><th>Time</th><th>User</th><th>Workshop</th><th>Change</th><th>Details</th></tr></thead><tbody>
-      ${rows.map((r) => `<tr><td class="nowrap">${esc(new Date(r.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }))}</td><td>${esc(r.username)}</td><td>${esc(wsn(r.workshop_id))}</td><td>${esc(r.action)}</td><td>${esc(r.details)}</td></tr>`).join('') || '<tr><td colspan="5" class="hint">No activity yet.</td></tr>'}</tbody></table></div>`;
+      ${rows.length ? '' : '<tr><td colspan="5" class="empty">No changes recorded yet. Saves, imports and deletions appear here.</td></tr>'}${rows.map((r) => `<tr><td class="nowrap">${esc(new Date(r.at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }))}</td><td>${esc(r.username)}</td><td>${esc(wsn(r.workshop_id))}</td><td>${esc(r.action)}</td><td>${esc(r.details)}</td></tr>`).join('') || '<tr><td colspan="5" class="hint">No activity yet.</td></tr>'}</tbody></table></div>`;
   } catch (e) { fail(e); }
 }
 
